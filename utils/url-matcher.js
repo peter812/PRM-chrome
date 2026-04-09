@@ -12,6 +12,15 @@ const SUPPORTED_DOMAINS = [
 ];
 
 /**
+ * URL path segments that are not usernames on Instagram / Facebook.
+ * @type {string[]}
+ */
+const NON_PROFILE_PATHS = [
+  'p', 'reel', 'stories', 'explore', 'accounts',
+  'groups', 'pages', 'events', 'watch', 'marketplace',
+];
+
+/**
  * Check if a URL matches any supported domain.
  * @param {string} url
  * @returns {{ matched: boolean, platform: string|null }}
@@ -68,7 +77,7 @@ function extractUsername(url) {
       default:
         // Instagram/Facebook: /{username}
         // Skip common non-profile paths
-        if (['p', 'reel', 'stories', 'explore', 'accounts', 'groups', 'pages', 'events', 'watch', 'marketplace'].includes(segments[0])) {
+        if (NON_PROFILE_PATHS.includes(segments[0])) {
           return { username: null, platform };
         }
         username = segments[0];

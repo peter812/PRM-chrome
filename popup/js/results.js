@@ -5,6 +5,8 @@
  * from chrome.storage.local in a card view.
  */
 
+import { escapeHtml, renderSocialAccountCard } from './social-card.js';
+
 /**
  * Retrieve stored scrape results from local storage.
  * @returns {Promise<Array>}
@@ -40,17 +42,6 @@ function clearResults() {
 }
 
 /**
- * Minimal HTML escaping to prevent XSS.
- * @param {string} str
- * @returns {string}
- */
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.appendChild(document.createTextNode(str));
-  return div.innerHTML;
-}
-
-/**
  * Format an ISO timestamp to a human-readable relative time or date.
  * @param {string} iso
  * @returns {string}
@@ -72,40 +63,12 @@ function formatTime(iso) {
 }
 
 /**
- * Render a social account card from search results.
+ * Render a social account card for the results page (with extended stats).
  * @param {object} account
  * @returns {string}
  */
-function renderSocialAccountCard(account) {
-  const name = account.name || account.full_name || account.username || 'Unknown';
-  const username = account.username || account.handle || '';
-  const platform = account.platform || '';
-  const bio = account.bio || account.description || '';
-  const followers = account.followers || account.follower_count || '';
-  const following = account.following || account.following_count || '';
-  const posts = account.posts || account.post_count || '';
-  const profileUrl = account.profile_url || account.url || '';
-  const avatar = account.avatar_url || account.profile_pic_url || '';
-
-  return `
-    <div class="social-account-card">
-      <div class="social-account-header">
-        ${avatar ? `<img class="social-account-avatar" src="${escapeHtml(avatar)}" alt="" />` : `<div class="social-account-avatar-placeholder">${escapeHtml(name.charAt(0).toUpperCase())}</div>`}
-        <div class="social-account-info">
-          <span class="social-account-name">${escapeHtml(name)}</span>
-          ${username ? `<span class="social-account-username">@${escapeHtml(username)}</span>` : ''}
-        </div>
-        ${platform ? `<span class="badge badge-info">${escapeHtml(platform)}</span>` : ''}
-      </div>
-      ${bio ? `<p class="social-account-bio">${escapeHtml(bio)}</p>` : ''}
-      <div class="social-account-meta">
-        ${followers ? `<span class="social-account-stat">👥 ${escapeHtml(String(followers))}</span>` : ''}
-        ${following ? `<span class="social-account-stat">➡ ${escapeHtml(String(following))}</span>` : ''}
-        ${posts ? `<span class="social-account-stat">📄 ${escapeHtml(String(posts))}</span>` : ''}
-        ${profileUrl ? `<a class="social-account-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer">View Profile ↗</a>` : ''}
-      </div>
-    </div>
-  `;
+function renderSearchResultCard(account) {
+  return renderSocialAccountCard(account, { showFollowing: true, showPosts: true });
 }
 
 /**
@@ -178,7 +141,7 @@ async function initResults() {
         <div class="results-section">
           <span class="section-label">Social Account Search Results</span>
           <p class="results-count text-xs mb-2">${searchResults.length} account${searchResults.length !== 1 ? 's' : ''} found</p>
-          ${searchResults.map(renderSocialAccountCard).join('')}
+          ${searchResults.map(renderSearchResultCard).join('')}
         </div>
       `;
     }
