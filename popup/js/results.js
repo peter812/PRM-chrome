@@ -1,18 +1,30 @@
 /**
  * Results page logic.
  *
- * Displays scraped data from chrome.storage.local in a card view,
- * filterable by URL, with timestamps and platform badges.
+ * Displays social account search results and scraped data
+ * from chrome.storage.local in a card view.
  */
 
 /**
- * Retrieve stored results from local storage.
+ * Retrieve stored scrape results from local storage.
  * @returns {Promise<Array>}
  */
-function getResults() {
+function getScrapeResults() {
   return new Promise((resolve) => {
     chrome.storage.local.get(['prm_results'], (data) => {
       resolve(data.prm_results ?? []);
+    });
+  });
+}
+
+/**
+ * Retrieve stored social account search results from local storage.
+ * @returns {Promise<Array>}
+ */
+function getSearchResults() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['prm_search_results'], (data) => {
+      resolve(data.prm_search_results ?? []);
     });
   });
 }
@@ -23,7 +35,7 @@ function getResults() {
  */
 function clearResults() {
   return new Promise((resolve) => {
-    chrome.storage.local.remove(['prm_results'], resolve);
+    chrome.storage.local.remove(['prm_results', 'prm_search_results'], resolve);
   });
 }
 
@@ -60,11 +72,48 @@ function formatTime(iso) {
 }
 
 /**
- * Render a single result card.
+ * Render a social account card from search results.
+ * @param {object} account
+ * @returns {string}
+ */
+function renderSocialAccountCard(account) {
+  const name = account.name || account.full_name || account.username || 'Unknown';
+  const username = account.username || account.handle || '';
+  const platform = account.platform || '';
+  const bio = account.bio || account.description || '';
+  const followers = account.followers || account.follower_count || '';
+  const following = account.following || account.following_count || '';
+  const posts = account.posts || account.post_count || '';
+  const profileUrl = account.profile_url || account.url || '';
+  const avatar = account.avatar_url || account.profile_pic_url || '';
+
+  return `
+    <div class="social-account-card">
+      <div class="social-account-header">
+        ${avatar ? `<img class="social-account-avatar" src="${escapeHtml(avatar)}" alt="" />` : `<div class="social-account-avatar-placeholder">${escapeHtml(name.charAt(0).toUpperCase())}</div>`}
+        <div class="social-account-info">
+          <span class="social-account-name">${escapeHtml(name)}</span>
+          ${username ? `<span class="social-account-username">@${escapeHtml(username)}</span>` : ''}
+        </div>
+        ${platform ? `<span class="badge badge-info">${escapeHtml(platform)}</span>` : ''}
+      </div>
+      ${bio ? `<p class="social-account-bio">${escapeHtml(bio)}</p>` : ''}
+      <div class="social-account-meta">
+        ${followers ? `<span class="social-account-stat">👥 ${escapeHtml(String(followers))}</span>` : ''}
+        ${following ? `<span class="social-account-stat">➡ ${escapeHtml(String(following))}</span>` : ''}
+        ${posts ? `<span class="social-account-stat">📄 ${escapeHtml(String(posts))}</span>` : ''}
+        ${profileUrl ? `<a class="social-account-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer">View Profile ↗</a>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render a single scrape result card.
  * @param {object} result
  * @returns {string}
  */
-function renderResultCard(result) {
+function renderScrapeResultCard(result) {
   const platform = result.platform
     ? `<span class="badge badge-info result-card-platform">${escapeHtml(result.platform)}</span>`
     : '';
@@ -100,7 +149,7 @@ function renderEmptyState() {
         </svg>
       </div>
       <h3>No results yet</h3>
-      <p>Scraped data from supported platforms will appear here.</p>
+      <p>Search for a social account by visiting a profile on a supported platform, or view scraped data here.</p>
     </div>
   `;
 }
@@ -112,18 +161,46 @@ async function initResults() {
   const container = document.getElementById('results-content');
   if (!container) return;
 
-  const results = await getResults();
+  const searchResults = await getSearchResults();
+  const scrapeResults = await getScrapeResults();
 
-  if (results.length === 0) {
+  const hasSearch = searchResults.length > 0;
+  const hasScrape = scrapeResults.length > 0;
+
+  if (!hasSearch && !hasScrape) {
     container.innerHTML = renderEmptyState();
   } else {
-    // Show newest first
-    const sorted = [...results].sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    );
-    container.innerHTML =
-      `<p class="results-count text-xs mb-2">${sorted.length} result${sorted.length !== 1 ? 's' : ''}</p>` +
-      sorted.map(renderResultCard).join('');
+    let html = '';
+
+    // Social account search results section
+    if (hasSearch) {
+      html += `
+        <div class="results-section">
+          <span class="section-label">Social Account Search Results</span>
+          <p class="results-count text-xs mb-2">${searchResults.length} account${searchResults.length !== 1 ? 's' : ''} found</p>
+          ${searchResults.map(renderSocialAccountCard).join('')}
+        </div>
+      `;
+    }
+
+    // Scraped data results section
+    if (hasScrape) {
+      if (hasSearch) {
+        html += '<div class="divider"></div>';
+      }
+      const sorted = [...scrapeResults].sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      html += `
+        <div class="results-section">
+          <span class="section-label">Scraped Data</span>
+          <p class="results-count text-xs mb-2">${sorted.length} result${sorted.length !== 1 ? 's' : ''}</p>
+          ${sorted.map(renderScrapeResultCard).join('')}
+        </div>
+      `;
+    }
+
+    container.innerHTML = html;
   }
 
   // Bind clear button
