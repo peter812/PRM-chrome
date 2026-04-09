@@ -193,11 +193,17 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 /**
- * Listen for tab URL changes. If the URL matches a supported platform,
- * update the badge and inject content scripts.
+ * Listen for tab URL changes. Handles both navigation start (clear injection
+ * tracker) and page load complete (badge update + content script injection).
  */
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  // Only act when the page has finished loading and we have a URL
+  // When navigation starts, clear the injection tracker for this tab
+  if (changeInfo.status === 'loading') {
+    injectedTabs.delete(tabId);
+    return;
+  }
+
+  // Only proceed when the page has finished loading and we have a URL
   if (changeInfo.status !== 'complete' || !tab.url) return;
 
   const { matched, platform } = matchUrl(tab.url);
@@ -215,15 +221,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         await sendToApi(result);
       }
     }, 1500);
-  }
-});
-
-/**
- * When a tab navigates away, remove it from the injection tracker.
- */
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') {
-    injectedTabs.delete(tabId);
   }
 });
 
