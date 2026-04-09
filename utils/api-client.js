@@ -4,6 +4,12 @@
 
 import { STORAGE_KEYS, get } from './storage.js';
 
+/** Default maximum retry attempts. */
+const MAX_RETRIES = 3;
+
+/** Base delay in ms for exponential back-off. */
+const BASE_DELAY_MS = 500;
+
 /**
  * Build the full endpoint URL from the stored base URL.
  * @param {string} path – e.g. "/api/v1/ping"
@@ -32,6 +38,39 @@ async function defaultHeaders() {
 }
 
 /**
+ * Fetch with exponential back-off retry.
+ * @param {string} url
+ * @param {RequestInit} options
+ * @param {number} [maxRetries]
+ * @returns {Promise<Response>}
+ */
+async function fetchWithRetry(url, options, maxRetries = MAX_RETRIES) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      // Don't retry client errors (4xx) except 429 (rate limit)
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        throw new Error(`API error: ${res.status} ${res.statusText}`);
+      }
+      lastError = new Error(`API error: ${res.status} ${res.statusText}`);
+    } catch (err) {
+      lastError = err;
+      // Re-throw client errors immediately
+      if (err.message && err.message.startsWith('API error: 4')) {
+        throw err;
+      }
+    }
+    // Exponential back-off: 500ms, 1s, 2s, …
+    if (attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, BASE_DELAY_MS * Math.pow(2, attempt)));
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Perform a health-check / auth-validation request.
  * Resolves to `true` if the server responds with a 2xx status.
  * @param {string} apiUrl – full base URL to test
@@ -40,33 +79,66 @@ async function defaultHeaders() {
  */
 async function ping(apiUrl, apiKey) {
   const url = `${apiUrl.replace(/\/+$/, '')}/api/v1/ping`;
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-  });
-  return res.ok;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Fetch PRM information for a given page URL.
+ * Uses retry with exponential back-off.
  * @param {string} pageUrl – the URL of the page the user is viewing
  * @returns {Promise<object>} – parsed JSON body
  */
 async function getUrlInfo(pageUrl) {
   const url = await buildUrl('/api/v1/url-info');
   const headers = await defaultHeaders();
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({ url: pageUrl }),
   });
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
-  }
   return res.json();
 }
 
-export { ping, getUrlInfo };
+/**
+ * Post scraped results to the API.
+ * Uses retry with exponential back-off.
+ * @param {object} result – { url, platform, data, timestamp }
+ * @returns {Promise<object>}
+ */
+async function postScrapeResults(result) {
+  const url = await buildUrl('/api/v1/scrape-results');
+  const headers = await defaultHeaders();
+  const res = await fetchWithRetry(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(result),
+  });
+  return res.json();
+}
+
+/**
+ * Fetch the URL allow-list from the API.
+ * @returns {Promise<object>}
+ */
+async function fetchUrlList() {
+  const url = await buildUrl('/api/v1/url-list');
+  const headers = await defaultHeaders();
+  const res = await fetchWithRetry(url, {
+    method: 'GET',
+    headers,
+  });
+  return res.json();
+}
+
+export { ping, getUrlInfo, postScrapeResults, fetchUrlList };
