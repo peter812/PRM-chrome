@@ -6,6 +6,8 @@ import { initRouter, navigateTo } from './router.js';
 import { initHome } from './home.js';
 import { initSettings } from './settings.js';
 import { initUrlInfo } from './url-info.js';
+import { initResults } from './results.js';
+import { initAbout } from './about.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   // Define callbacks that fire when each page is shown
@@ -13,7 +15,8 @@ document.addEventListener('DOMContentLoaded', () => {
     home: initHome,
     settings: initSettings,
     'url-info': initUrlInfo,
-    // scraping: no-op — TBD
+    results: initResults,
+    about: initAbout,
   };
 
   // Wire up nav-bar click handling
