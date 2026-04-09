@@ -27,6 +27,7 @@ function getCurrentTabUrl() {
  */
 async function initUrlInfo() {
   const container = document.getElementById('url-info-content');
+  if (!container) return;
 
   // Ensure user is configured
   const configured = await isConfigured();

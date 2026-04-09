@@ -14,14 +14,13 @@ import { navigateTo } from './router.js';
  */
 async function initHome() {
   const container = document.getElementById('home-content');
+  if (!container) return;
+
   const configured = await isConfigured();
 
   if (configured) {
     // User is "logged in" — redirect to URL Info page
-    navigateTo('url-info', () => {
-      // Trigger url-info initialisation through the callback wired in popup.js
-      document.dispatchEvent(new CustomEvent('prm:show-url-info'));
-    });
+    navigateTo('url-info');
     return;
   }
 

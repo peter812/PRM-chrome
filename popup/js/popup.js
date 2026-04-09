@@ -19,9 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Wire up nav-bar click handling
   initRouter(pageCallbacks);
 
-  // Listen for programmatic navigation events (e.g. home → url-info redirect)
-  document.addEventListener('prm:show-url-info', () => initUrlInfo());
-
   // Show the home page on open
   initHome();
 });
