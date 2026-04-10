@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=420" />
+  <meta name="viewport" content="width=360" />
   <title>PRM Extension</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -10,169 +10,101 @@
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-  <!-- Top navigation bar (Heroicons outline SVGs) -->
-  <nav id="navbar" aria-label="Main navigation">
-    <button class="nav-btn active" data-page="home" title="Home" aria-label="Home">
-      <span class="nav-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 12 8.954-8.955a1.126 1.126 0 0 1 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-        </svg>
-      </span>
-      <span class="nav-label">Home</span>
-    </button>
-    <button class="nav-btn" data-page="settings" title="Settings" aria-label="Settings">
-      <span class="nav-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-        </svg>
-      </span>
-      <span class="nav-label">Settings</span>
-    </button>
-    <button class="nav-btn" data-page="url-info" title="URL Info" aria-label="URL Info">
-      <span class="nav-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
-        </svg>
-      </span>
-      <span class="nav-label">URL Info</span>
-    </button>
-    <button class="nav-btn" data-page="results" title="Results" aria-label="Results">
-      <span class="nav-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-        </svg>
-      </span>
-      <span class="nav-label">Results</span>
-    </button>
-    <button class="nav-btn" data-page="about" title="About" aria-label="About">
-      <span class="nav-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
-        </svg>
-      </span>
-      <span class="nav-label">About</span>
-    </button>
-  </nav>
 
-  <!-- Page container — each child is a page -->
-  <main id="page-container">
-
-    <!-- ============ HOME PAGE ============ -->
-    <section id="page-home" class="page active">
-      <div class="page-inner" id="home-content">
-        <!-- Populated by home.js -->
-        <p class="loading-text">Loading…</p>
+  <!-- ============ VIEW 1: Server URL Input ============ -->
+  <section id="view-server-url" class="view">
+    <div class="view-inner">
+      <div class="view-header">
+        <img src="../icons/icon-48.png" alt="PRM logo" class="view-logo" />
+        <h1 class="view-title">PRM Extension</h1>
+        <p class="view-subtitle">Connect to your PRM instance</p>
       </div>
-    </section>
 
-    <!-- ============ SETTINGS PAGE ============ -->
-    <section id="page-settings" class="page">
-      <h2>Settings</h2>
-      <form id="settings-form" autocomplete="off">
+      <form id="server-url-form" autocomplete="off">
         <div class="form-group">
-          <label class="form-label" for="api-url">API URL</label>
-          <input id="api-url" class="form-input" type="url" placeholder="https://your-prm-api.example.com" required />
-          <span class="form-helper">The base URL of your PRM API server</span>
+          <label class="form-label" for="server-url-input">Server URL</label>
+          <input
+            id="server-url-input"
+            class="form-input"
+            type="url"
+            placeholder="https://prm.example.com"
+            required
+          />
+          <span class="form-helper">The URL of your self-hosted PRM instance</span>
         </div>
 
-        <div class="form-group">
-          <label class="form-label" for="api-key">API Key</label>
-          <input id="api-key" class="form-input mono" type="password" placeholder="Enter your API key" required />
-          <span class="form-helper">Your authentication key for the API</span>
-        </div>
-
-        <button type="submit" class="btn btn-primary" id="save-settings-btn">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
-            <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-          </svg>
-          Save &amp; Verify
+        <button type="submit" class="btn btn-primary btn-full" id="connect-btn">
+          Connect
         </button>
       </form>
-      <div id="settings-status" class="status-message" role="status"></div>
-    </section>
 
-    <!-- ============ URL INFO PAGE ============ -->
-    <section id="page-url-info" class="page">
-      <h2>URL Info</h2>
-      <div id="url-info-content">
-        <p class="loading-text">Checking current tab…</p>
+      <div id="server-url-status" class="status-message" role="status"></div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW 2: Code Entry ============ -->
+  <section id="view-code-entry" class="view" style="display:none;">
+    <div class="view-inner">
+      <div class="view-header">
+        <h1 class="view-title">Enter Pairing Code</h1>
+        <p class="view-subtitle">Open PRM Settings → Chrome Extension to see your code</p>
       </div>
-    </section>
 
-    <!-- ============ RESULTS PAGE ============ -->
-    <section id="page-results" class="page">
-      <div class="results-header">
-        <h2 style="margin-bottom:0">Results</h2>
-        <button class="btn btn-secondary btn-sm" id="clear-results-btn" aria-label="Clear all results">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="14" height="14">
-            <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-          </svg>
-          Clear
+      <form id="code-entry-form" autocomplete="off">
+        <div class="code-input-group">
+          <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="0" aria-label="Digit 1" />
+          <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="1" aria-label="Digit 2" />
+          <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="2" aria-label="Digit 3" />
+          <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="3" aria-label="Digit 4" />
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-full" id="verify-btn" disabled>
+          Verify
         </button>
-      </div>
-      <div id="results-content">
-        <!-- Populated by results.js -->
-        <p class="loading-text">Loading results…</p>
-      </div>
-    </section>
+      </form>
 
-    <!-- ============ ABOUT PAGE ============ -->
-    <section id="page-about" class="page">
-      <div class="about-header">
-        <img src="../icons/icon-48.png" alt="PRM logo" class="about-logo" />
-        <div>
-          <div class="about-title">PRM Extension</div>
-          <div class="about-version" id="about-version">v0.1.0</div>
+      <div id="code-entry-status" class="status-message" role="status"></div>
+
+      <button class="btn-link" id="change-server-btn">
+        ← Change server URL
+      </button>
+    </div>
+  </section>
+
+  <!-- ============ VIEW 3: Connected / Search ============ -->
+  <section id="view-connected" class="view" style="display:none;">
+    <div class="view-inner">
+      <div class="connected-header">
+        <div class="connected-status">
+          <span class="status-dot status-dot-green"></span>
+          <h1 class="view-title">Connected to PRM</h1>
         </div>
       </div>
 
-      <div class="about-section">
-        <h3>About</h3>
-        <p>PRM Chrome Extension helps you manage personal relationships by automatically detecting supported platforms in your browser and connecting to your PRM API for data enrichment.</p>
+      <div class="search-group">
+        <div class="search-input-wrapper">
+          <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="18" height="18">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+          </svg>
+          <input
+            id="search-input"
+            class="form-input search-input"
+            type="text"
+            placeholder="Search contacts..."
+            autocomplete="off"
+          />
+        </div>
       </div>
 
-      <div class="divider"></div>
+      <div id="search-results" class="search-results"></div>
 
-      <div class="about-section">
-        <h3>Supported Platforms</h3>
-        <ul class="platform-list" id="about-platforms">
-          <!-- Populated by about.js -->
-        </ul>
+      <div class="view-footer">
+        <button class="btn btn-danger btn-full" id="disconnect-btn">
+          Disconnect
+        </button>
       </div>
-
-      <div class="divider"></div>
-
-      <div class="about-section">
-        <h3>Links</h3>
-        <ul class="about-link-list">
-          <li>
-            <a href="https://github.com/peter812/PRM-chrome" target="_blank" rel="noopener noreferrer">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
-              </svg>
-              Source Code on GitHub
-            </a>
-          </li>
-          <li>
-            <a href="https://github.com/peter812/PRM-chrome/issues" target="_blank" rel="noopener noreferrer">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 12.75c1.148 0 2.278.08 3.383.237 1.037.146 1.866.966 1.866 2.013 0 3.728-2.35 6.75-5.25 6.75S6.75 18.728 6.75 15c0-1.046.83-1.867 1.866-2.013A24.204 24.204 0 0 1 12 12.75Zm0 0c2.883 0 5.647.508 8.207 1.44a23.91 23.91 0 0 1-1.152-6.44c0-2.21.507-4.305 1.411-6.174A23.834 23.834 0 0 0 12 .75a23.834 23.834 0 0 0-8.466 1.526A14.98 14.98 0 0 1 4.945 7.75a23.91 23.91 0 0 1-1.152 6.44A23.88 23.88 0 0 1 12 12.75Z" />
-              </svg>
-              Report an Issue
-            </a>
-          </li>
-        </ul>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="about-section">
-        <p class="text-xs" style="color: var(--color-text-tertiary);">Built with ❤️ for personal relationship management.</p>
-      </div>
-    </section>
-
-  </main>
+    </div>
+  </section>
 
   <!-- Scripts (ES modules) -->
   <script type="module" src="js/popup.js"></script>

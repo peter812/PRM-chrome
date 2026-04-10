@@ -1,91 +1,108 @@
 /**
  * API client for communicating with the PRM backend.
+ *
+ * Uses the 4-digit pairing code auth flow:
+ *   1. pingServer — health check (no auth)
+ *   2. verifyCode — exchange 4-digit code for session token
+ *   3. pingSession — keep session alive / validate
+ *   4. searchPeople — search contacts with session token
+ *
+ * All fetch calls use AbortController with a 10-second timeout and return
+ * structured results instead of throwing exceptions.
  */
 
-import { STORAGE_KEYS, get } from './storage.js';
+/** Default timeout for API requests in milliseconds. */
+const REQUEST_TIMEOUT_MS = 10_000;
 
-/** Default maximum retry attempts. */
-const MAX_RETRIES = 3;
-
-/** Base delay in ms for exponential back-off. */
-const BASE_DELAY_MS = 500;
+/** Shorter timeout for the server ping (health check). */
+const PING_TIMEOUT_MS = 5_000;
 
 /**
- * Build the full endpoint URL from the stored base URL.
- * @param {string} path – e.g. "/api/v1/ping"
- * @returns {Promise<string>}
- */
-async function buildUrl(path) {
-  const base = await get(STORAGE_KEYS.API_URL);
-  if (!base) throw new Error('API URL is not configured.');
-  // Strip trailing slash from base, ensure path starts with /
-  const cleanBase = base.replace(/\/+$/, '');
-  const cleanPath = path.startsWith('/') ? path : `/${path}`;
-  return `${cleanBase}${cleanPath}`;
-}
-
-/**
- * Return default headers including the API key.
- * @returns {Promise<Record<string, string>>}
- */
-async function defaultHeaders() {
-  const apiKey = await get(STORAGE_KEYS.API_KEY);
-  const headers = { 'Content-Type': 'application/json' };
-  if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-  return headers;
-}
-
-/**
- * Fetch with exponential back-off retry.
+ * Helper: fetch with an AbortController timeout.
  * @param {string} url
  * @param {RequestInit} options
- * @param {number} [maxRetries]
+ * @param {number} [timeoutMs]
  * @returns {Promise<Response>}
  */
-async function fetchWithRetry(url, options, maxRetries = MAX_RETRIES) {
-  let lastError;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await fetch(url, options);
-      if (res.ok) return res;
-      // Don't retry client errors (4xx) except 429 (rate limit)
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        throw new Error(`API error: ${res.status} ${res.statusText}`);
-      }
-      lastError = new Error(`API error: ${res.status} ${res.statusText}`);
-    } catch (err) {
-      lastError = err;
-      // Re-throw client errors immediately
-      if (err.message && err.message.startsWith('API error: 4')) {
-        throw err;
-      }
-    }
-    // Exponential back-off: 500ms, 1s, 2s, …
-    if (attempt < maxRetries) {
-      await new Promise((r) => setTimeout(r, BASE_DELAY_MS * Math.pow(2, attempt)));
-    }
-  }
-  throw lastError;
+function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 /**
- * Perform a health-check / auth-validation request.
- * Resolves to `true` if the server responds with a 2xx status.
- * @param {string} apiUrl – full base URL to test
- * @param {string} apiKey – API key to test
- * @returns {Promise<boolean>}
+ * Ping the PRM server to check it is online.
+ * `GET {serverUrl}/api/v1/ping`
+ *
+ * @param {string} serverUrl — base URL of the PRM server
+ * @returns {Promise<boolean>} — true if server responds with status "ok"
  */
-async function ping(apiUrl, apiKey) {
-  const url = `${apiUrl.replace(/\/+$/, '')}/api/v1/ping`;
+async function pingServer(serverUrl) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/ping`;
   try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
+    const res = await fetchWithTimeout(url, { method: 'GET' }, PING_TIMEOUT_MS);
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify a 4-digit pairing code with the PRM server.
+ * `POST {serverUrl}/api/extension-auth/verify`
+ *
+ * @param {string} serverUrl
+ * @param {string} code — 4-digit code
+ * @returns {Promise<{ success: boolean, sessionToken?: string, sessionId?: string, createdAt?: string, error?: string }>}
+ */
+async function verifyCode(serverUrl, code) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/extension-auth/verify`;
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+
+    const data = await res.json();
+
+    if (res.status === 201 || res.ok) {
+      return {
+        success: true,
+        sessionToken: data.sessionToken,
+        sessionId: data.sessionId,
+        createdAt: data.createdAt,
+      };
+    }
+
+    return { success: false, error: data.error || 'Invalid or expired code' };
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return { success: false, error: 'Request timed out. Check your connection.' };
+    }
+    return { success: false, error: 'Cannot connect to server. Check the URL and try again.' };
+  }
+}
+
+/**
+ * Ping an active session to keep it alive.
+ * `POST {serverUrl}/api/extension-auth/ping`
+ *
+ * @param {string} serverUrl
+ * @param {string} token — session token
+ * @returns {Promise<boolean>} — true if session is still valid
+ */
+async function pingSession(serverUrl, token) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/extension-auth/ping`;
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'X-Extension-Token': token },
     });
     return res.ok;
   } catch {
@@ -94,73 +111,39 @@ async function ping(apiUrl, apiKey) {
 }
 
 /**
- * Fetch PRM information for a given page URL.
- * Uses retry with exponential back-off.
- * @param {string} pageUrl – the URL of the page the user is viewing
- * @returns {Promise<object>} – parsed JSON body
+ * Search contacts in PRM.
+ * `GET {serverUrl}/api/search?q={query}`
+ *
+ * @param {string} serverUrl
+ * @param {string} token — session token
+ * @param {string} query — search query
+ * @returns {Promise<{ success: boolean, results?: Array, error?: string }>}
  */
-async function getUrlInfo(pageUrl) {
-  const url = await buildUrl('/api/v1/url-info');
-  const headers = await defaultHeaders();
-  const res = await fetchWithRetry(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ url: pageUrl }),
-  });
-  return res.json();
-}
+async function searchPeople(serverUrl, token, query) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/search?q=${encodeURIComponent(query)}`;
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'GET',
+      headers: { 'X-Extension-Token': token },
+    });
 
-/**
- * Post scraped results to the API.
- * Uses retry with exponential back-off.
- * @param {object} result – { url, platform, data, timestamp }
- * @returns {Promise<object>}
- */
-async function postScrapeResults(result) {
-  const url = await buildUrl('/api/v1/scrape-results');
-  const headers = await defaultHeaders();
-  const res = await fetchWithRetry(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(result),
-  });
-  return res.json();
-}
+    if (res.status === 401) {
+      return { success: false, error: 'Session expired. Please reconnect.' };
+    }
 
-/**
- * Fetch the URL allow-list from the API.
- * @returns {Promise<object>}
- */
-async function fetchUrlList() {
-  const url = await buildUrl('/api/v1/url-list');
-  const headers = await defaultHeaders();
-  const res = await fetchWithRetry(url, {
-    method: 'GET',
-    headers,
-  });
-  return res.json();
-}
+    if (!res.ok) {
+      return { success: false, error: `Server error (${res.status}). Please try again later.` };
+    }
 
-/**
- * Search PRM social accounts by username.
- * Uses retry with exponential back-off.
- * @param {string} username – the social media username to search for
- * @param {string} [platform] – optional platform filter (e.g. "Instagram")
- * @returns {Promise<object>} – parsed JSON body with social account results
- */
-async function searchSocialAccounts(username, platform) {
-  const url = await buildUrl('/api/v1/social-accounts/search');
-  const headers = await defaultHeaders();
-  const body = { username };
-  if (platform) {
-    body.platform = platform;
+    const data = await res.json();
+    const results = Array.isArray(data) ? data : data.results || [];
+    return { success: true, results };
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return { success: false, error: 'Request timed out. Check your connection.' };
+    }
+    return { success: false, error: 'Network error. Check your connection.' };
   }
-  const res = await fetchWithRetry(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  return res.json();
 }
 
-export { ping, getUrlInfo, postScrapeResults, fetchUrlList, searchSocialAccounts };
+export { pingServer, verifyCode, pingSession, searchPeople };
