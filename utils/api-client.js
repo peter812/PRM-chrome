@@ -141,4 +141,26 @@ async function fetchUrlList() {
   return res.json();
 }
 
-export { ping, getUrlInfo, postScrapeResults, fetchUrlList };
+/**
+ * Search PRM social accounts by username.
+ * Uses retry with exponential back-off.
+ * @param {string} username – the social media username to search for
+ * @param {string} [platform] – optional platform filter (e.g. "Instagram")
+ * @returns {Promise<object>} – parsed JSON body with social account results
+ */
+async function searchSocialAccounts(username, platform) {
+  const url = await buildUrl('/api/v1/social-accounts/search');
+  const headers = await defaultHeaders();
+  const body = { username };
+  if (platform) {
+    body.platform = platform;
+  }
+  const res = await fetchWithRetry(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export { ping, getUrlInfo, postScrapeResults, fetchUrlList, searchSocialAccounts };

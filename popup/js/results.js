@@ -1,18 +1,32 @@
 /**
  * Results page logic.
  *
- * Displays scraped data from chrome.storage.local in a card view,
- * filterable by URL, with timestamps and platform badges.
+ * Displays social account search results and scraped data
+ * from chrome.storage.local in a card view.
  */
 
+import { escapeHtml, renderSocialAccountCard } from './social-card.js';
+
 /**
- * Retrieve stored results from local storage.
+ * Retrieve stored scrape results from local storage.
  * @returns {Promise<Array>}
  */
-function getResults() {
+function getScrapeResults() {
   return new Promise((resolve) => {
     chrome.storage.local.get(['prm_results'], (data) => {
       resolve(data.prm_results ?? []);
+    });
+  });
+}
+
+/**
+ * Retrieve stored social account search results from local storage.
+ * @returns {Promise<Array>}
+ */
+function getSearchResults() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['prm_search_results'], (data) => {
+      resolve(data.prm_search_results ?? []);
     });
   });
 }
@@ -23,19 +37,8 @@ function getResults() {
  */
 function clearResults() {
   return new Promise((resolve) => {
-    chrome.storage.local.remove(['prm_results'], resolve);
+    chrome.storage.local.remove(['prm_results', 'prm_search_results'], resolve);
   });
-}
-
-/**
- * Minimal HTML escaping to prevent XSS.
- * @param {string} str
- * @returns {string}
- */
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.appendChild(document.createTextNode(str));
-  return div.innerHTML;
 }
 
 /**
@@ -60,11 +63,20 @@ function formatTime(iso) {
 }
 
 /**
- * Render a single result card.
+ * Render a social account card for the results page (with extended stats).
+ * @param {object} account
+ * @returns {string}
+ */
+function renderSearchResultCard(account) {
+  return renderSocialAccountCard(account, { showFollowing: true, showPosts: true });
+}
+
+/**
+ * Render a single scrape result card.
  * @param {object} result
  * @returns {string}
  */
-function renderResultCard(result) {
+function renderScrapeResultCard(result) {
   const platform = result.platform
     ? `<span class="badge badge-info result-card-platform">${escapeHtml(result.platform)}</span>`
     : '';
@@ -100,7 +112,7 @@ function renderEmptyState() {
         </svg>
       </div>
       <h3>No results yet</h3>
-      <p>Scraped data from supported platforms will appear here.</p>
+      <p>Search for a social account by visiting a profile on a supported platform, or view scraped data here.</p>
     </div>
   `;
 }
@@ -112,18 +124,46 @@ async function initResults() {
   const container = document.getElementById('results-content');
   if (!container) return;
 
-  const results = await getResults();
+  const searchResults = await getSearchResults();
+  const scrapeResults = await getScrapeResults();
 
-  if (results.length === 0) {
+  const hasSearch = searchResults.length > 0;
+  const hasScrape = scrapeResults.length > 0;
+
+  if (!hasSearch && !hasScrape) {
     container.innerHTML = renderEmptyState();
   } else {
-    // Show newest first
-    const sorted = [...results].sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    );
-    container.innerHTML =
-      `<p class="results-count text-xs mb-2">${sorted.length} result${sorted.length !== 1 ? 's' : ''}</p>` +
-      sorted.map(renderResultCard).join('');
+    let html = '';
+
+    // Social account search results section
+    if (hasSearch) {
+      html += `
+        <div class="results-section">
+          <span class="section-label">Social Account Search Results</span>
+          <p class="results-count text-xs mb-2">${searchResults.length} account${searchResults.length !== 1 ? 's' : ''} found</p>
+          ${searchResults.map(renderSearchResultCard).join('')}
+        </div>
+      `;
+    }
+
+    // Scraped data results section
+    if (hasScrape) {
+      if (hasSearch) {
+        html += '<div class="divider"></div>';
+      }
+      const sorted = [...scrapeResults].sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      html += `
+        <div class="results-section">
+          <span class="section-label">Scraped Data</span>
+          <p class="results-count text-xs mb-2">${sorted.length} result${sorted.length !== 1 ? 's' : ''}</p>
+          ${sorted.map(renderScrapeResultCard).join('')}
+        </div>
+      `;
+    }
+
+    container.innerHTML = html;
   }
 
   // Bind clear button

@@ -12,6 +12,15 @@ const SUPPORTED_DOMAINS = [
 ];
 
 /**
+ * URL path segments that are not usernames on Instagram / Facebook.
+ * @type {string[]}
+ */
+const NON_PROFILE_PATHS = [
+  'p', 'reel', 'stories', 'explore', 'accounts',
+  'groups', 'pages', 'events', 'watch', 'marketplace',
+];
+
+/**
  * Check if a URL matches any supported domain.
  * @param {string} url
  * @returns {{ matched: boolean, platform: string|null }}
@@ -26,6 +35,62 @@ function matchUrl(url) {
 }
 
 /**
+ * Extract the username from a supported social media profile URL.
+ *
+ * Handles URLs like:
+ *   - https://instagram.com/{username}
+ *   - https://www.instagram.com/{username}/
+ *   - https://facebook.com/{username}
+ *   - https://linkedin.com/in/{username}
+ *   - https://vsco.co/{username}/gallery
+ *
+ * @param {string} url
+ * @returns {{ username: string|null, platform: string|null }}
+ */
+function extractUsername(url) {
+  const { matched, platform } = matchUrl(url);
+  if (!matched || !platform) return { username: null, platform: null };
+
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname
+      .split('/')
+      .filter((s) => s.length > 0);
+
+    if (segments.length === 0) return { username: null, platform };
+
+    let username = null;
+
+    switch (platform) {
+      case 'LinkedIn':
+        // LinkedIn profile URLs: /in/{username}
+        if (segments[0] === 'in' && segments[1]) {
+          username = segments[1];
+        }
+        break;
+      case 'VSCO':
+        // VSCO URLs: /{username} or /{username}/gallery
+        username = segments[0];
+        break;
+      case 'Instagram':
+      case 'Facebook':
+      default:
+        // Instagram/Facebook: /{username}
+        // Skip common non-profile paths
+        if (NON_PROFILE_PATHS.includes(segments[0])) {
+          return { username: null, platform };
+        }
+        username = segments[0];
+        break;
+    }
+
+    return { username: username || null, platform };
+  } catch {
+    return { username: null, platform };
+  }
+}
+
+/**
  * Return the list of supported platform names.
  * @returns {string[]}
  */
@@ -33,4 +98,4 @@ function supportedPlatforms() {
   return SUPPORTED_DOMAINS.map((d) => d.name);
 }
 
-export { matchUrl, supportedPlatforms, SUPPORTED_DOMAINS };
+export { matchUrl, extractUsername, supportedPlatforms, SUPPORTED_DOMAINS };
