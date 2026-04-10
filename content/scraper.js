@@ -13,6 +13,17 @@
 /* eslint-disable no-console */
 
 /**
+ * Decode HTML entities in a string (e.g. &#064; → @, &quot; → ").
+ * @param {string} str
+ * @returns {string}
+ */
+function decodeHtmlEntities(str) {
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = str;
+  return textarea.value;
+}
+
+/**
  * Platform-specific extraction rules.
  *
  * Each entry maps a platform name to an extraction function that
@@ -23,21 +34,94 @@
  */
 const EXTRACTORS = {
   /**
-   * Instagram profile extractor (placeholder selectors — to be finalised).
+   * Instagram profile extractor.
+   *
+   * Uses stable SEO meta tags instead of obfuscated DOM class names.
+   * - Username & Display Name: from <title> or <meta property="og:title">
+   * - Followers & Following: from <meta name="description"> / og:description
+   * - Bio: text inside quotes in the description meta tag
+   * - Bio Link: DOM scan for external links inside <header>
    */
   Instagram: () => {
     try {
-      const nameEl = document.querySelector('header h2, header h1');
-      const bioEl = document.querySelector('header section > div.-vDIg span, header section span[class]');
-      const stats = document.querySelectorAll('header section ul li span span');
+      let username = null;
+      let displayName = null;
+      let followers = null;
+      let following = null;
+      let bio = null;
+      let bioLink = null;
 
-      return {
-        username: nameEl ? nameEl.textContent.trim() : null,
-        bio: bioEl ? bioEl.textContent.trim() : null,
-        posts: stats[0] ? stats[0].textContent.trim() : null,
-        followers: stats[1] ? stats[1].textContent.trim() : null,
-        following: stats[2] ? stats[2].textContent.trim() : null,
-      };
+      // --- Username & Display Name from <title> ---
+      const titleText = decodeHtmlEntities(document.title || '');
+      // Pattern: "Display Name (@username) • Instagram photos and videos"
+      const titleMatch = titleText.match(/^(.+?)\s*\(@?([^)]+)\)/);
+      if (titleMatch) {
+        displayName = titleMatch[1].trim();
+        username = titleMatch[2].trim();
+      } else {
+        // Fallback: og:title
+        const ogTitle = document.querySelector('meta[property="og:title"]');
+        if (ogTitle) {
+          const ogText = decodeHtmlEntities(ogTitle.getAttribute('content') || '');
+          const ogMatch = ogText.match(/^(.+?)\s*\(@?([^)]+)\)/);
+          if (ogMatch) {
+            displayName = ogMatch[1].trim();
+            username = ogMatch[2].trim();
+          }
+        }
+      }
+
+      // --- Followers, Following & Bio from <meta name="description"> ---
+      const descMeta =
+        document.querySelector('meta[name="description"]') ||
+        document.querySelector('meta[property="og:description"]');
+
+      if (descMeta) {
+        const descText = decodeHtmlEntities(descMeta.getAttribute('content') || '');
+
+        // Followers: "168 Followers" or "1.2M Followers"
+        const followersMatch = descText.match(/([\d,.\w]+)\s+Followers/i);
+        if (followersMatch) followers = followersMatch[1];
+
+        // Following: "2,762 Following"
+        const followingMatch = descText.match(/([\d,.\w]+)\s+Following/i);
+        if (followingMatch) following = followingMatch[1];
+
+        // Bio: text after the last colon+quote block — "…on Instagram: "bio text here""
+        const bioMatch = descText.match(/:\s*"(.+)"\s*$/s);
+        if (bioMatch) bio = bioMatch[1].trim();
+      }
+
+      // --- Bio Link: external link inside <header> ---
+      const headerLinks = document.querySelectorAll('header a[href]');
+      for (const link of headerLinks) {
+        const href = link.getAttribute('href') || '';
+        // Instagram wraps external links through l.instagram.com or shows them directly
+        if (
+          href &&
+          !href.startsWith('/') &&
+          !href.includes('instagram.com') &&
+          /^https?:\/\//.test(href)
+        ) {
+          bioLink = href;
+          break;
+        }
+      }
+
+      // Fallback: look for linktr.ee or similar in JSON state blobs
+      if (!bioLink) {
+        const scripts = document.querySelectorAll('script[type="application/json"]');
+        for (const script of scripts) {
+          const text = script.textContent || '';
+          const urlMatch = text.match(/"(https?:\/\/(?!(?:www\.)?instagram\.com)[^\s"]+)"/);
+          if (urlMatch) {
+            bioLink = urlMatch[1];
+            break;
+          }
+        }
+      }
+
+      return { username, displayName, bio, bioLink, followers, following };
     } catch {
       return null;
     }

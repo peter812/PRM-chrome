@@ -1,12 +1,12 @@
 /**
- * Popup bootstrap — manages the 3-view auth flow:
+ * Popup bootstrap — manages the 3-view auth flow + tabbed connected view:
  *   View 1: Server URL input (not connected)
  *   View 2: 4-digit code entry (server connected, not paired)
- *   View 3: Connected / Search (paired)
+ *   View 3: Connected — two tabs: Scraper & Settings
  */
 
-import { getStoredConfig, saveConfig, clearConfig, set, STORAGE_KEYS } from '../../utils/storage.js';
-import { pingServer, verifyCode, searchPeople } from '../../utils/api-client.js';
+import { getStoredConfig, saveConfig, clearConfig, set, get, STORAGE_KEYS } from '../../utils/storage.js';
+import { pingServer, verifyCode } from '../../utils/api-client.js';
 
 // ── DOM references ──────────────────────────────────────
 
@@ -157,7 +157,7 @@ function initCodeEntryView() {
     if (result.success) {
       await saveConfig(serverUrl, result.sessionToken, result.sessionId);
       showView('view-connected');
-      document.getElementById('search-input')?.focus();
+      detectCurrentPage();
     } else {
       showStatus(
         'code-entry-status',
@@ -180,89 +180,206 @@ function initCodeEntryView() {
   });
 }
 
-// ── View 3: Connected / Search ─────────────────────────
+// ── Tab switching ───────────────────────────────────────
 
-function initConnectedView() {
-  const searchInput = document.getElementById('search-input');
-  const resultsContainer = document.getElementById('search-results');
-  let debounceTimer = null;
+function initTabs() {
+  const tabButtons = document.querySelectorAll('.tab-btn');
 
-  function renderResults(results) {
-    if (!results || results.length === 0) {
-      resultsContainer.innerHTML =
-        '<p class="search-empty">No contacts found.</p>';
-      return;
-    }
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.tab;
+      if (!targetId) return;
 
-    resultsContainer.innerHTML = results
-      .map((person) => {
-        const name = escapeHtml(
-          [person.firstName, person.lastName].filter(Boolean).join(' ') ||
-            person.name ||
-            'Unknown',
-        );
-        const company = person.company
-          ? `<span class="result-company">${escapeHtml(person.company)}</span>`
-          : '';
-        const email = person.email
-          ? `<span class="result-email">${escapeHtml(person.email)}</span>`
-          : '';
-
-        return `
-          <a class="search-result-item" href="#" data-person-id="${escapeHtml(String(person.id || ''))}">
-            <div class="result-avatar">${escapeHtml(name.charAt(0).toUpperCase())}</div>
-            <div class="result-info">
-              <span class="result-name">${name}</span>
-              ${company}
-              ${email}
-            </div>
-          </a>
-        `;
-      })
-      .join('');
-
-    // Click to open person page in new tab
-    resultsContainer.querySelectorAll('.search-result-item').forEach((item) => {
-      item.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const personId = item.dataset.personId;
-        if (personId && /^[\w-]+$/.test(personId)) {
-          const { serverUrl } = await getStoredConfig();
-          const url = `${serverUrl}/person/${encodeURIComponent(personId)}`;
-          chrome.tabs.create({ url });
-        }
+      // Update button states
+      tabButtons.forEach((b) => {
+        b.classList.remove('tab-active');
+        b.setAttribute('aria-selected', 'false');
       });
+      btn.classList.add('tab-active');
+      btn.setAttribute('aria-selected', 'true');
+
+      // Update panel visibility
+      document.querySelectorAll('.tab-panel').forEach((p) => (p.style.display = 'none'));
+      const panel = document.getElementById(targetId);
+      if (panel) panel.style.display = '';
     });
+  });
+}
+
+// ── Dark Mode Toggle ────────────────────────────────────
+
+async function initDarkMode() {
+  const toggle = document.getElementById('dark-mode-toggle');
+  if (!toggle) return;
+
+  // Load stored preference
+  const storedTheme = await get(STORAGE_KEYS.DARK_MODE);
+  if (storedTheme === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    toggle.checked = true;
+  } else if (storedTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    toggle.checked = false;
+  } else {
+    // No preference stored — follow system; check if system prefers dark
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    toggle.checked = prefersDark;
   }
 
-  searchInput?.addEventListener('input', () => {
-    clearTimeout(debounceTimer);
-    const query = searchInput.value.trim();
+  toggle.addEventListener('change', async () => {
+    const theme = toggle.checked ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    await set(STORAGE_KEYS.DARK_MODE, theme);
+  });
+}
 
-    if (!query) {
-      resultsContainer.innerHTML = '';
+// ── Instagram URL matching (mirrors url-matcher.js) ─────
+
+const INSTAGRAM_PATTERN = /^https?:\/\/(www\.)?instagram\.com\//i;
+const NON_PROFILE_PATHS = ['p', 'reel', 'stories', 'explore', 'accounts', 'direct', 'reels'];
+
+/**
+ * Check if a URL is an Instagram profile page.
+ * @param {string} url
+ * @returns {{ isProfile: boolean, username: string|null }}
+ */
+function checkInstagramProfile(url) {
+  if (!INSTAGRAM_PATTERN.test(url)) return { isProfile: false, username: null };
+
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split('/').filter((s) => s.length > 0);
+    if (segments.length === 0) return { isProfile: false, username: null };
+    if (NON_PROFILE_PATHS.includes(segments[0])) return { isProfile: false, username: null };
+    return { isProfile: true, username: segments[0] };
+  } catch {
+    return { isProfile: false, username: null };
+  }
+}
+
+// ── Scraper Tab Logic ───────────────────────────────────
+
+/**
+ * Detect the current tab's URL and update the scraper UI.
+ */
+async function detectCurrentPage() {
+  const urlText = document.getElementById('current-url-text');
+  const platformBadge = document.getElementById('scraper-platform-badge');
+  const platformName = document.getElementById('scraper-platform-name');
+  const scrapeBtn = document.getElementById('scrape-btn');
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) {
+      urlText.textContent = 'No page detected';
+      scrapeBtn.disabled = true;
+      platformBadge.style.display = 'none';
       return;
     }
 
-    debounceTimer = setTimeout(async () => {
-      resultsContainer.innerHTML = '<p class="search-loading">Searching…</p>';
+    urlText.textContent = tab.url;
 
-      const { serverUrl, sessionToken } = await getStoredConfig();
-      const result = await searchPeople(serverUrl, sessionToken, query);
+    const { isProfile, username } = checkInstagramProfile(tab.url);
 
-      if (result.success) {
-        renderResults(result.results);
-      } else {
-        resultsContainer.innerHTML = `<p class="search-error">${escapeHtml(result.error)}</p>`;
+    if (isProfile && username) {
+      platformBadge.style.display = '';
+      platformName.textContent = `Instagram · @${escapeHtml(username)}`;
+      scrapeBtn.disabled = false;
+    } else {
+      platformBadge.style.display = 'none';
+      scrapeBtn.disabled = true;
+    }
+  } catch {
+    urlText.textContent = 'Unable to read current tab';
+    scrapeBtn.disabled = true;
+    platformBadge.style.display = 'none';
+  }
+}
+
+/**
+ * Display scraped data in the card.
+ * @param {object} data
+ */
+function displayScrapedData(data) {
+  const card = document.getElementById('scraped-data-card');
+  if (!card || !data) return;
+
+  const fields = ['username', 'displayName', 'bio', 'bioLink', 'followers', 'following'];
+  for (const field of fields) {
+    const el = document.getElementById(`scraped-${field}`);
+    if (el) {
+      el.textContent = data[field] || '—';
+    }
+  }
+  card.style.display = '';
+}
+
+function initScraperTab() {
+  const scrapeBtn = document.getElementById('scrape-btn');
+  if (!scrapeBtn) return;
+
+  scrapeBtn.addEventListener('click', async () => {
+    clearStatus('scrape-status');
+    scrapeBtn.disabled = true;
+    scrapeBtn.textContent = 'Scraping…';
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        showStatus('scrape-status', 'error', 'No active tab found.');
+        return;
       }
-    }, 300);
-  });
 
+      // Inject content script if not already present, then send extraction message
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content/scraper.js'],
+        });
+      } catch {
+        // Script may already be injected — proceed
+      }
+
+      // Wait briefly for the content script to initialize
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        type: 'PRM_EXTRACT',
+        platform: 'Instagram',
+      });
+
+      if (response && response.success && response.data) {
+        showStatus('scrape-status', 'success', 'Profile scraped successfully!');
+        displayScrapedData(response.data);
+      } else {
+        showStatus('scrape-status', 'error', 'Could not extract profile data. Make sure you are on an Instagram profile page.');
+      }
+    } catch (err) {
+      showStatus('scrape-status', 'error', `Scraping failed: ${err.message || 'unknown error'}`);
+    } finally {
+      scrapeBtn.disabled = false;
+      scrapeBtn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+        </svg>
+        Scrape Profile
+      `;
+
+      // Re-check if button should be enabled
+      const { isProfile } = checkInstagramProfile(
+        document.getElementById('current-url-text')?.textContent || ''
+      );
+      scrapeBtn.disabled = !isProfile;
+    }
+  });
+}
+
+// ── View 3: Connected / Settings ─────────────────────────
+
+function initConnectedView() {
   // Disconnect button
   document.getElementById('disconnect-btn')?.addEventListener('click', async () => {
     await clearConfig();
-    resultsContainer.innerHTML = '';
-    if (searchInput) searchInput.value = '';
     showView('view-server-url');
     document.getElementById('server-url-input')?.focus();
   });
@@ -275,6 +392,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initServerUrlView();
   initCodeEntryView();
   initConnectedView();
+  initTabs();
+  initScraperTab();
+  await initDarkMode();
 
   // Determine initial view based on stored config
   const config = await getStoredConfig();
@@ -282,7 +402,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (config.serverUrl && config.sessionToken) {
     // Fully paired → show connected view
     showView('view-connected');
-    document.getElementById('search-input')?.focus();
+    detectCurrentPage();
   } else if (config.serverUrl) {
     // Server URL saved but not yet paired → show code entry
     showView('view-code-entry');
