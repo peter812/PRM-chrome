@@ -121,8 +121,11 @@ const EXTRACTORS = {
       // Fallback: look for linktr.ee or similar in JSON state blobs
       if (!bioLink) {
         const scripts = document.querySelectorAll('script[type="application/json"]');
-        for (const script of scripts) {
-          const text = script.textContent || '';
+        // Limit search to the first 10 script tags to avoid scanning excessively large blobs
+        const maxScripts = Math.min(scripts.length, 10);
+        for (let i = 0; i < maxScripts; i++) {
+          const text = scripts[i].textContent || '';
+          if (text.length > 500_000) continue; // skip very large blobs
           const urlMatch = text.match(/"(https?:\/\/(?!(?:www\.)?instagram\.com)[^\s"]+)"/);
           if (urlMatch) {
             bioLink = urlMatch[1];

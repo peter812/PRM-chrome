@@ -340,8 +340,9 @@ function initScraperTab() {
         // Script may already be injected — proceed
       }
 
-      // Wait briefly for the content script to initialize
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Brief delay for the content script to initialize after injection
+      const SCRIPT_INIT_DELAY_MS = 500;
+      await new Promise((resolve) => setTimeout(resolve, SCRIPT_INIT_DELAY_MS));
 
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: 'PRM_EXTRACT',
