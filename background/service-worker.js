@@ -111,7 +111,12 @@ function updateBadge(tabId, matched) {
 
 // ── Periodic session ping ────────────────────────────────
 
-chrome.alarms.create('ping-prm', { periodInMinutes: 5 });
+// Create alarm only if it doesn't already exist
+chrome.alarms.get('ping-prm', (existing) => {
+  if (!existing) {
+    chrome.alarms.create('ping-prm', { periodInMinutes: 5 });
+  }
+});
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'ping-prm') return;

@@ -226,9 +226,9 @@ function initConnectedView() {
       item.addEventListener('click', async (e) => {
         e.preventDefault();
         const personId = item.dataset.personId;
-        if (personId) {
+        if (personId && /^[\w-]+$/.test(personId)) {
           const { serverUrl } = await getStoredConfig();
-          const url = `${serverUrl}/person/${personId}`;
+          const url = `${serverUrl}/person/${encodeURIComponent(personId)}`;
           chrome.tabs.create({ url });
         }
       });
