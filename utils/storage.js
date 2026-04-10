@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   SERVER_URL: 'prmServerUrl',
   SESSION_TOKEN: 'extensionSessionToken',
   SESSION_ID: 'extensionSessionId',
+  DARK_MODE: 'prmDarkMode',
 };
 
 /**

@@ -71,38 +71,98 @@
     </div>
   </section>
 
-  <!-- ============ VIEW 3: Connected / Search ============ -->
+  <!-- ============ VIEW 3: Connected — Tabbed Layout ============ -->
   <section id="view-connected" class="view" style="display:none;">
-    <div class="view-inner">
-      <div class="connected-header">
-        <div class="connected-status">
-          <span class="status-dot status-dot-green"></span>
-          <h1 class="view-title">Connected to PRM</h1>
+    <div class="view-inner view-inner-tabbed">
+
+      <!-- Tab bar -->
+      <nav class="tab-bar" role="tablist">
+        <button class="tab-btn tab-active" role="tab" aria-selected="true" data-tab="tab-scraper">Scraper</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-tab="tab-settings">Settings</button>
+      </nav>
+
+      <!-- ── Scraper Tab ── -->
+      <div id="tab-scraper" class="tab-panel" role="tabpanel">
+        <div class="scraper-section">
+          <h2 class="section-title">Current Page</h2>
+          <div id="current-url-display" class="url-display">
+            <span id="current-url-text" class="url-text">No page detected</span>
+          </div>
+          <div id="scraper-platform-badge" class="platform-badge" style="display:none;">
+            <span class="platform-badge-dot"></span>
+            <span id="scraper-platform-name"></span>
+          </div>
+        </div>
+
+        <div class="scraper-section">
+          <button class="btn btn-primary btn-full" id="scrape-btn" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+            </svg>
+            Scrape Profile
+          </button>
+          <div id="scrape-status" class="status-message" role="status"></div>
+        </div>
+
+        <!-- Scraped data card (hidden until data is available) -->
+        <div id="scraped-data-card" class="scraped-card" style="display:none;">
+          <h2 class="section-title">Scraped Data</h2>
+          <div class="scraped-fields">
+            <div class="scraped-field">
+              <span class="scraped-label">Username</span>
+              <span class="scraped-value" id="scraped-username">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Display Name</span>
+              <span class="scraped-value" id="scraped-displayName">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Bio</span>
+              <span class="scraped-value scraped-bio" id="scraped-bio">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Bio Link</span>
+              <span class="scraped-value" id="scraped-bioLink">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Followers</span>
+              <span class="scraped-value" id="scraped-followers">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Following</span>
+              <span class="scraped-value" id="scraped-following">—</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="search-group">
-        <div class="search-input-wrapper">
-          <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="18" height="18">
-            <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-          </svg>
-          <input
-            id="search-input"
-            class="form-input search-input"
-            type="text"
-            placeholder="Search contacts..."
-            autocomplete="off"
-          />
+      <!-- ── Settings Tab ── -->
+      <div id="tab-settings" class="tab-panel" role="tabpanel" style="display:none;">
+        <div class="settings-section">
+          <div class="settings-row">
+            <div class="settings-row-label">
+              <span class="settings-label">Dark Mode</span>
+              <span class="settings-desc">Toggle dark / light appearance</span>
+            </div>
+            <label class="toggle-switch" for="dark-mode-toggle">
+              <input type="checkbox" id="dark-mode-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2 class="section-title">Connection</h2>
+          <div class="connected-status-info">
+            <span class="status-dot status-dot-green"></span>
+            <span>Connected to PRM</span>
+          </div>
+          <button class="btn btn-danger btn-full" id="disconnect-btn">
+            Disconnect
+          </button>
         </div>
       </div>
 
-      <div id="search-results" class="search-results"></div>
-
-      <div class="view-footer">
-        <button class="btn btn-danger btn-full" id="disconnect-btn">
-          Disconnect
-        </button>
-      </div>
     </div>
   </section>
 
