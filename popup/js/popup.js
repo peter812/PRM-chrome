@@ -365,11 +365,14 @@ function initScraperTab() {
         Scrape Profile
       `;
 
-      // Re-check if button should be enabled
-      const { isProfile } = checkInstagramProfile(
-        document.getElementById('current-url-text')?.textContent || ''
-      );
-      scrapeBtn.disabled = !isProfile;
+      // Re-check if button should be enabled using the actual tab URL
+      try {
+        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const { isProfile } = checkInstagramProfile(currentTab?.url || '');
+        scrapeBtn.disabled = !isProfile;
+      } catch {
+        scrapeBtn.disabled = true;
+      }
     }
   });
 }

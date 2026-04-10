@@ -97,10 +97,20 @@ const EXTRACTORS = {
       for (const link of headerLinks) {
         const href = link.getAttribute('href') || '';
         // Instagram wraps external links through l.instagram.com or shows them directly
+        // Use URL parsing to reliably check the hostname
+        let isInstagramLink = false;
+        try {
+          const linkUrl = new URL(href);
+          isInstagramLink = linkUrl.hostname === 'instagram.com' ||
+            linkUrl.hostname.endsWith('.instagram.com');
+        } catch {
+          // Not a valid URL — skip
+          continue;
+        }
         if (
           href &&
           !href.startsWith('/') &&
-          !href.includes('instagram.com') &&
+          !isInstagramLink &&
           /^https?:\/\//.test(href)
         ) {
           bioLink = href;
