@@ -2,17 +2,17 @@
  * Background service worker for PRM Chrome Extension.
  *
  * Responsibilities:
+ *   - Periodic session ping (every 5 minutes) to keep session alive.
+ *   - Session validation — clear credentials and update badge on 401.
  *   - Listen for tab updates and check URLs against the allow-list.
- *   - Update the extension badge to reflect match status.
+ *   - Update the extension badge to reflect match / connection status.
  *   - Programmatically inject content scripts (stealth + scraper) on matched URLs.
  *   - Relay scraped data to the PRM API and cache results locally.
  */
 
 /* global chrome */
 
-// ── Imports (service worker compatible) ─────────────────
-// Note: ES module imports are not available in MV3 service workers by default.
-// We inline the required logic or use importScripts for non-module scripts.
+// ── Inline helpers (ES module imports not available in MV3 service workers) ──
 
 /**
  * Supported platform patterns (mirrors utils/url-matcher.js).
@@ -24,10 +24,14 @@ const SUPPORTED_DOMAINS = [
   { name: 'VSCO', pattern: /^https?:\/\/(www\.)?vsco\.co\//i },
 ];
 
+const STORAGE_KEYS = {
+  SERVER_URL: 'prmServerUrl',
+  SESSION_TOKEN: 'extensionSessionToken',
+  SESSION_ID: 'extensionSessionId',
+};
+
 /**
  * Check if a URL matches any supported domain.
- * @param {string} url
- * @returns {{ matched: boolean, platform: string|null }}
  */
 function matchUrl(url) {
   for (const domain of SUPPORTED_DOMAINS) {
@@ -38,14 +42,64 @@ function matchUrl(url) {
   return { matched: false, platform: null };
 }
 
+/**
+ * Read stored config from chrome.storage.local.
+ */
+function getStoredConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(
+      [STORAGE_KEYS.SERVER_URL, STORAGE_KEYS.SESSION_TOKEN, STORAGE_KEYS.SESSION_ID],
+      (data) => {
+        resolve({
+          serverUrl: data[STORAGE_KEYS.SERVER_URL] ?? null,
+          sessionToken: data[STORAGE_KEYS.SESSION_TOKEN] ?? null,
+          sessionId: data[STORAGE_KEYS.SESSION_ID] ?? null,
+        });
+      },
+    );
+  });
+}
+
+/**
+ * Clear all stored auth data.
+ */
+function clearConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(
+      [STORAGE_KEYS.SERVER_URL, STORAGE_KEYS.SESSION_TOKEN, STORAGE_KEYS.SESSION_ID],
+      resolve,
+    );
+  });
+}
+
+/**
+ * Ping the session to keep it alive.
+ * POST {serverUrl}/api/extension-auth/ping with X-Extension-Token header.
+ */
+async function pingSession(serverUrl, token) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/extension-auth/ping`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Extension-Token': token },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Badge colours ──────────────────────────────────────
 const BADGE_MATCHED = { color: '#065f46', text: '✓' };
 const BADGE_UNMATCHED = { color: '', text: '' };
+const BADGE_DISCONNECTED = { color: '#EF4444', text: '!' };
 
 /**
  * Update the extension badge for a given tab.
- * @param {number} tabId
- * @param {boolean} matched
  */
 function updateBadge(tabId, matched) {
   const { color, text } = matched ? BADGE_MATCHED : BADGE_UNMATCHED;
@@ -55,25 +109,44 @@ function updateBadge(tabId, matched) {
   }
 }
 
+// ── Periodic session ping ────────────────────────────────
+
+// Create alarm only if it doesn't already exist
+chrome.alarms.get('ping-prm', (existing) => {
+  if (!existing) {
+    chrome.alarms.create('ping-prm', { periodInMinutes: 5 });
+  }
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'ping-prm') return;
+
+  const config = await getStoredConfig();
+  if (config.serverUrl && config.sessionToken) {
+    const isValid = await pingSession(config.serverUrl, config.sessionToken);
+    if (!isValid) {
+      await clearConfig();
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#EF4444' });
+    } else {
+      chrome.action.setBadgeText({ text: '' });
+    }
+  }
+});
+
 // ── Content script injection ────────────────────────────
 
 /**
  * Inject the stealth and scraper content scripts into a tab.
- * The stealth script runs in the MAIN world to patch navigator properties;
- * the scraper runs in the ISOLATED world so it has chrome.runtime access.
- * @param {number} tabId
- * @param {string} platform
  */
 async function injectContentScripts(tabId, platform) {
   try {
-    // Inject stealth patches into the page context (MAIN world)
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['content/stealth.js'],
       world: 'MAIN',
     });
 
-    // Inject scraper into the isolated extension world
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['content/scraper.js'],
@@ -89,9 +162,6 @@ async function injectContentScripts(tabId, platform) {
 
 /**
  * Request extraction from the content script.
- * @param {number} tabId
- * @param {string} platform
- * @returns {Promise<object|null>}
  */
 function requestExtraction(tabId, platform) {
   return new Promise((resolve) => {
@@ -113,14 +183,12 @@ function requestExtraction(tabId, platform) {
 
 /**
  * Store a scrape result in local storage.
- * @param {object} result
  */
 async function cacheResult(result) {
   return new Promise((resolve) => {
     chrome.storage.local.get(['prm_results'], (data) => {
       const results = data.prm_results ?? [];
       results.push(result);
-      // Keep the most recent 200 results
       const trimmed = results.slice(-200);
       chrome.storage.local.set({ prm_results: trimmed }, resolve);
     });
@@ -128,58 +196,33 @@ async function cacheResult(result) {
 }
 
 /**
- * Send scraped data to the configured PRM API.
- * @param {object} result
+ * Send scraped data to the PRM API using the extension session token.
  */
 async function sendToApi(result) {
   try {
-    const data = await new Promise((resolve) => {
-      chrome.storage.sync.get(['prm_api_url', 'prm_api_key'], (d) => resolve(d));
-    });
+    const config = await getStoredConfig();
+    if (!config.serverUrl || !config.sessionToken) return;
 
-    const apiUrl = data.prm_api_url;
-    const apiKey = data.prm_api_key;
-    if (!apiUrl || !apiKey) return;
+    const url = `${config.serverUrl.replace(/\/+$/, '')}/api/v1/scrape-results`;
 
-    const url = `${apiUrl.replace(/\/+$/, '')}/api/v1/scrape-results`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
 
-    await fetchWithRetry(url, {
+    await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        'X-Extension-Token': config.sessionToken,
       },
       body: JSON.stringify(result),
+      signal: controller.signal,
     });
+
+    clearTimeout(timer);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[PRM] Failed to send result to API:', err.message);
   }
-}
-
-/**
- * Fetch with exponential back-off retry.
- * @param {string} url
- * @param {RequestInit} options
- * @param {number} [maxRetries=3]
- * @returns {Promise<Response>}
- */
-async function fetchWithRetry(url, options, maxRetries = 3) {
-  let lastError;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await fetch(url, options);
-      if (res.ok) return res;
-      lastError = new Error(`HTTP ${res.status}`);
-    } catch (err) {
-      lastError = err;
-    }
-    // Exponential back-off: 500ms, 1s, 2s, …
-    if (attempt < maxRetries) {
-      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
-    }
-  }
-  throw lastError;
 }
 
 // ── Track which tabs already have scripts injected ──────
@@ -193,17 +236,14 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 /**
- * Listen for tab URL changes. Handles both navigation start (clear injection
- * tracker) and page load complete (badge update + content script injection).
+ * Listen for tab URL changes.
  */
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  // When navigation starts, clear the injection tracker for this tab
   if (changeInfo.status === 'loading') {
     injectedTabs.delete(tabId);
     return;
   }
 
-  // Only proceed when the page has finished loading and we have a URL
   if (changeInfo.status !== 'complete' || !tab.url) return;
 
   const { matched, platform } = matchUrl(tab.url);
@@ -213,7 +253,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     injectedTabs.add(tabId);
     await injectContentScripts(tabId, platform);
 
-    // Small delay to let the content script initialise
     setTimeout(async () => {
       const result = await requestExtraction(tabId, platform);
       if (result && result.success) {
@@ -232,7 +271,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 /**
- * Handle the active tab change — update badge for the newly focused tab.
+ * Handle the active tab change.
  */
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {

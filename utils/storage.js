@@ -1,56 +1,115 @@
 /**
- * Thin wrapper around chrome.storage.sync for settings persistence.
+ * Storage wrapper for PRM Chrome Extension auth data.
+ *
+ * Uses chrome.storage.local for persistence of server URL, session token,
+ * and session ID used by the 4-digit pairing code auth flow.
  */
 
 const STORAGE_KEYS = {
-  API_URL: 'prm_api_url',
-  API_KEY: 'prm_api_key',
+  SERVER_URL: 'prmServerUrl',
+  SESSION_TOKEN: 'extensionSessionToken',
+  SESSION_ID: 'extensionSessionId',
 };
 
 /**
- * Retrieve a value from sync storage.
+ * Retrieve a value from local storage.
  * @param {string} key
  * @returns {Promise<*>}
  */
 function get(key) {
   return new Promise((resolve) => {
-    chrome.storage.sync.get([key], (result) => {
+    chrome.storage.local.get([key], (result) => {
       resolve(result[key] ?? null);
     });
   });
 }
 
 /**
- * Store a value in sync storage.
+ * Store a value in local storage.
  * @param {string} key
  * @param {*} value
  * @returns {Promise<void>}
  */
 function set(key, value) {
   return new Promise((resolve) => {
-    chrome.storage.sync.set({ [key]: value }, resolve);
+    chrome.storage.local.set({ [key]: value }, resolve);
   });
 }
 
 /**
- * Remove a key from sync storage.
- * @param {string} key
+ * Remove one or more keys from local storage.
+ * @param {string|string[]} keys
  * @returns {Promise<void>}
  */
-function remove(key) {
+function remove(keys) {
+  const keyArray = Array.isArray(keys) ? keys : [keys];
   return new Promise((resolve) => {
-    chrome.storage.sync.remove([key], resolve);
+    chrome.storage.local.remove(keyArray, resolve);
   });
 }
 
 /**
- * Check whether the user has saved both an API URL and an API key.
+ * Read the stored server URL and session token.
+ * @returns {Promise<{ serverUrl: string|null, sessionToken: string|null, sessionId: string|null }>}
+ */
+async function getStoredConfig() {
+  const serverUrl = await get(STORAGE_KEYS.SERVER_URL);
+  const sessionToken = await get(STORAGE_KEYS.SESSION_TOKEN);
+  const sessionId = await get(STORAGE_KEYS.SESSION_ID);
+  return { serverUrl, sessionToken, sessionId };
+}
+
+/**
+ * Save server URL, session token and session ID.
+ * @param {string} serverUrl
+ * @param {string} sessionToken
+ * @param {string} sessionId
+ * @returns {Promise<void>}
+ */
+async function saveConfig(serverUrl, sessionToken, sessionId) {
+  await set(STORAGE_KEYS.SERVER_URL, serverUrl);
+  await set(STORAGE_KEYS.SESSION_TOKEN, sessionToken);
+  await set(STORAGE_KEYS.SESSION_ID, sessionId);
+}
+
+/**
+ * Remove all stored auth data.
+ * @returns {Promise<void>}
+ */
+async function clearConfig() {
+  await remove([
+    STORAGE_KEYS.SERVER_URL,
+    STORAGE_KEYS.SESSION_TOKEN,
+    STORAGE_KEYS.SESSION_ID,
+  ]);
+}
+
+/**
+ * Check whether the user has a server URL and session token stored.
  * @returns {Promise<boolean>}
  */
 async function isConfigured() {
-  const apiUrl = await get(STORAGE_KEYS.API_URL);
-  const apiKey = await get(STORAGE_KEYS.API_KEY);
-  return Boolean(apiUrl && apiKey);
+  const { serverUrl, sessionToken } = await getStoredConfig();
+  return Boolean(serverUrl && sessionToken);
 }
 
-export { STORAGE_KEYS, get, set, remove, isConfigured };
+/**
+ * Check whether the user has a server URL stored (but may not be paired yet).
+ * @returns {Promise<boolean>}
+ */
+async function hasServerUrl() {
+  const serverUrl = await get(STORAGE_KEYS.SERVER_URL);
+  return Boolean(serverUrl);
+}
+
+export {
+  STORAGE_KEYS,
+  get,
+  set,
+  remove,
+  getStoredConfig,
+  saveConfig,
+  clearConfig,
+  isConfigured,
+  hasServerUrl,
+};
