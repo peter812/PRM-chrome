@@ -10,6 +10,7 @@ const STORAGE_KEYS = {
   SESSION_TOKEN: 'extensionSessionToken',
   SESSION_ID: 'extensionSessionId',
   DARK_MODE: 'prmDarkMode',
+  DEBUG_MODE: 'prmDebugMode',
 };
 
 /**

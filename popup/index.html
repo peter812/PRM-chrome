@@ -107,6 +107,12 @@
             </svg>
             Import Posts to PRM
           </button>
+          <button class="btn btn-secondary btn-full" id="import-latest-post-btn" style="margin-top: 8px; display: none;" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+            </svg>
+            Add Most Recent Post to PRM
+          </button>
           <div id="scrape-status" class="status-message" role="status"></div>
         </div>
 
@@ -152,6 +158,16 @@
             </div>
             <label class="toggle-switch" for="dark-mode-toggle">
               <input type="checkbox" id="dark-mode-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-label">
+              <span class="settings-label">Debug Mode</span>
+              <span class="settings-desc">Trace performance and export log</span>
+            </div>
+            <label class="toggle-switch" for="debug-mode-toggle">
+              <input type="checkbox" id="debug-mode-toggle" />
               <span class="toggle-slider"></span>
             </label>
           </div>

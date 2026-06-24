@@ -12,6 +12,8 @@
 
 /* eslint-disable no-console */
 
+(() => {
+
 /**
  * Decode HTML entities in a string (e.g. &#064; → @, &quot; → ").
  * @param {string} str
@@ -304,7 +306,15 @@ async function downloadPostMedia(shortcode, mediaUrls) {
  * Listens for extraction requests from the service worker.
  */
 function init() {
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (window.__prmMessageListener) {
+    try {
+      chrome.runtime.onMessage.removeListener(window.__prmMessageListener);
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  window.__prmMessageListener = (message, _sender, sendResponse) => {
     if (message.type === 'PRM_EXTRACT') {
       const platform = message.platform;
       const data = extract(platform);
@@ -342,9 +352,13 @@ function init() {
     }
     // Return true to indicate async response
     return true;
-  });
+  };
+
+  chrome.runtime.onMessage.addListener(window.__prmMessageListener);
 
   console.log('[PRM] Content script loaded — ready for extraction requests.');
 }
 
 init();
+
+})();
