@@ -267,12 +267,17 @@ async function detectCurrentPage() {
   const platformBadge = document.getElementById('scraper-platform-badge');
   const platformName = document.getElementById('scraper-platform-name');
   const scrapeBtn = document.getElementById('scrape-btn');
+  const importPostsBtn = document.getElementById('import-posts-btn');
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.url) {
       urlText.textContent = 'No page detected';
       scrapeBtn.disabled = true;
+      if (importPostsBtn) {
+        importPostsBtn.style.display = 'none';
+        importPostsBtn.disabled = true;
+      }
       platformBadge.style.display = 'none';
       return;
     }
@@ -285,13 +290,25 @@ async function detectCurrentPage() {
       platformBadge.style.display = '';
       platformName.textContent = `Instagram · @${escapeHtml(username)}`;
       scrapeBtn.disabled = false;
+      if (importPostsBtn) {
+        importPostsBtn.style.display = '';
+        importPostsBtn.disabled = false;
+      }
     } else {
       platformBadge.style.display = 'none';
       scrapeBtn.disabled = true;
+      if (importPostsBtn) {
+        importPostsBtn.style.display = 'none';
+        importPostsBtn.disabled = true;
+      }
     }
   } catch {
     urlText.textContent = 'Unable to read current tab';
     scrapeBtn.disabled = true;
+    if (importPostsBtn) {
+      importPostsBtn.style.display = 'none';
+      importPostsBtn.disabled = true;
+    }
     platformBadge.style.display = 'none';
   }
 }
@@ -316,11 +333,13 @@ function displayScrapedData(data) {
 
 function initScraperTab() {
   const scrapeBtn = document.getElementById('scrape-btn');
+  const importPostsBtn = document.getElementById('import-posts-btn');
   if (!scrapeBtn) return;
 
   scrapeBtn.addEventListener('click', async () => {
     clearStatus('scrape-status');
     scrapeBtn.disabled = true;
+    if (importPostsBtn) importPostsBtn.disabled = true;
     scrapeBtn.textContent = 'Scraping…';
 
     try {
@@ -371,11 +390,160 @@ function initScraperTab() {
         const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         const { isProfile } = checkInstagramProfile(currentTab?.url || '');
         scrapeBtn.disabled = !isProfile;
+        if (importPostsBtn) {
+          importPostsBtn.disabled = !isProfile;
+        }
       } catch {
         scrapeBtn.disabled = true;
+        if (importPostsBtn) {
+          importPostsBtn.disabled = true;
+        }
       }
     }
   });
+
+  if (importPostsBtn) {
+    importPostsBtn.addEventListener('click', async () => {
+      clearStatus('scrape-status');
+      
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        showStatus('scrape-status', 'error', 'No active tab found.');
+        return;
+      }
+
+      const { isProfile, username } = checkInstagramProfile(tab.url);
+      if (!isProfile || !username) {
+        showStatus('scrape-status', 'error', 'Invalid Instagram profile page.');
+        return;
+      }
+
+      scrapeBtn.disabled = true;
+      importPostsBtn.disabled = true;
+      importPostsBtn.textContent = 'Connecting…';
+
+      try {
+        showStatus('scrape-status', 'info', 'Loading posts feed from Instagram...');
+        
+        // Ensure scraper is injected
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content/scraper.js'],
+          });
+        } catch {}
+
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          type: 'PRM_GET_INSTAGRAM_FEED',
+          username: username
+        });
+
+        if (!response || !response.success) {
+          throw new Error(response ? response.error : 'Failed to fetch Instagram feed.');
+        }
+
+        const posts = response.posts;
+        if (!posts || posts.length === 0) {
+          showStatus('scrape-status', 'info', 'No posts found on this profile.');
+          return;
+        }
+
+        showStatus('scrape-status', 'info', `Found ${posts.length} posts. Downloading and importing sequentially...`);
+
+        const config = await getStoredConfig();
+        if (!config.serverUrl || !config.sessionToken) {
+          throw new Error('Not connected to PRM. Please verify server settings.');
+        }
+
+        let importedCount = 0;
+        let duplicateCount = 0;
+
+        for (let i = 0; i < posts.length; i++) {
+          const post = posts[i];
+          const progressMsg = `Importing post ${i + 1} of ${posts.length} (@${post.shortcode})...`;
+          showStatus('scrape-status', 'info', progressMsg);
+          importPostsBtn.textContent = `Importing ${i + 1}/${posts.length}…`;
+
+          // Download media in Base64
+          const downloadResponse = await chrome.tabs.sendMessage(tab.id, {
+            type: 'PRM_DOWNLOAD_MEDIA',
+            shortcode: post.shortcode,
+            mediaUrls: post.mediaUrls
+          });
+
+          if (!downloadResponse || !downloadResponse.success) {
+            console.warn(`[PRM] Failed to download media for post ${post.shortcode}:`, downloadResponse ? downloadResponse.error : 'Unknown error');
+            continue;
+          }
+
+          // Bundle the payload
+          const payload = {
+            username: username,
+            platform: 'Instagram',
+            post: {
+              post_id: post.post_id,
+              shortcode: post.shortcode,
+              caption: post.caption,
+              taken_at: post.taken_at,
+              media_type: post.media_type,
+              media: downloadResponse.media
+            }
+          };
+
+          // Send to PRM sequentially
+          const url = `${config.serverUrl.replace(/\/+$/, '')}/api/v1/posts/import`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Extension-Token': config.sessionToken
+            },
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) {
+            console.warn(`[PRM] Failed to import post ${post.shortcode}: HTTP ${res.status}`);
+            continue;
+          }
+
+          const resData = await res.json();
+          if (resData.status === 'already_exists') {
+            duplicateCount++;
+          } else {
+            importedCount++;
+          }
+
+          // Small delay (500ms) to ensure smooth browser requests
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        showStatus('scrape-status', 'success', `Import completed! Successfully imported ${importedCount} posts (${duplicateCount} already existed).`);
+
+      } catch (err) {
+        showStatus('scrape-status', 'error', `Import failed: ${err.message || 'unknown error'}`);
+      } finally {
+        scrapeBtn.disabled = false;
+        importPostsBtn.disabled = false;
+        importPostsBtn.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          Import Posts to PRM
+        `;
+
+        // Re-check button states
+        try {
+          const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          const { isProfile } = checkInstagramProfile(currentTab?.url || '');
+          scrapeBtn.disabled = !isProfile;
+          importPostsBtn.disabled = !isProfile;
+        } catch {
+          scrapeBtn.disabled = true;
+          importPostsBtn.disabled = true;
+        }
+      }
+    });
+  }
 }
 
 // ── View 3: Connected / Settings ─────────────────────────

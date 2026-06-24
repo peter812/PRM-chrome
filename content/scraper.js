@@ -205,6 +205,101 @@ function extract(platform) {
 }
 
 /**
+ * Request data from the MAIN world injected script via window.postMessage.
+ */
+function fetchFromInjectContext(procedure, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => {
+      if (event.data && event.data.error) {
+        reject(new Error(event.data.error));
+      } else {
+        resolve(event.data);
+      }
+    };
+    window.postMessage({ procedure, ...payload }, "*", [channel.port2]);
+  });
+}
+
+/**
+ * Map raw Instagram feed items to PRM-compatible schema.
+ */
+function mapInstagramFeed(feedData) {
+  if (!feedData || !Array.isArray(feedData.items)) return [];
+
+  return feedData.items.map(post => {
+    const mediaUrls = [];
+
+    if (post.media_type === 8 && Array.isArray(post.carousel_media)) {
+      // Carousel post
+      post.carousel_media.forEach(item => {
+        const type = 'image'; // No video playback, thumbnails only
+        if (item.image_versions2 && Array.isArray(item.image_versions2.candidates) && item.image_versions2.candidates.length > 0) {
+          mediaUrls.push({ type, url: item.image_versions2.candidates[0].url });
+        }
+      });
+    } else {
+      // Single image or video (fallback to thumbnail cover image)
+      const type = 'image';
+      if (post.image_versions2 && Array.isArray(post.image_versions2.candidates) && post.image_versions2.candidates.length > 0) {
+        mediaUrls.push({ type, url: post.image_versions2.candidates[0].url });
+      }
+    }
+
+    return {
+      post_id: post.id || post.pk,
+      shortcode: post.code,
+      caption: post.caption ? post.caption.text : "",
+      taken_at: post.taken_at,
+      media_type: post.media_type,
+      mediaUrls
+    };
+  });
+}
+
+/**
+ * Fetch a URL from the browser and convert to Base64 Data URL.
+ */
+async function downloadUrlAsBase64(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image from CDN: ${response.statusText}`);
+  }
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Failed to read image as Base64"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Sequentially download and encode all media URLs for a post.
+ */
+async function downloadPostMedia(shortcode, mediaUrls) {
+  const downloadedMedia = [];
+  for (let i = 0; i < mediaUrls.length; i++) {
+    const item = mediaUrls[i];
+    try {
+      const base64Data = await downloadUrlAsBase64(item.url);
+      const ext = base64Data.split(';')[0].split('/')[1] || 'jpg';
+      // Clean up extension names (e.g. jpeg -> jpg)
+      const cleanExt = ext === 'jpeg' ? 'jpg' : ext;
+      downloadedMedia.push({
+        type: item.type,
+        filename: `${shortcode}_${i}.${cleanExt}`,
+        data: base64Data
+      });
+    } catch (err) {
+      console.warn(`[PRM] Failed to download image index ${i} for shortcode ${shortcode}:`, err.message);
+      throw err;
+    }
+  }
+  return downloadedMedia;
+}
+
+/**
  * Main entry point — called when the script is injected.
  * Listens for extraction requests from the service worker.
  */
@@ -221,6 +316,29 @@ function init() {
         data,
         timestamp: new Date().toISOString(),
       });
+    } else if (message.type === 'PRM_GET_INSTAGRAM_FEED') {
+      fetchFromInjectContext('loadUserFeed', { username: message.username })
+        .then(result => {
+          if (result.success && result.feed) {
+            const posts = mapInstagramFeed(result.feed);
+            sendResponse({ success: true, posts });
+          } else {
+            sendResponse({ success: false, error: result.error || "Failed to load feed data." });
+          }
+        })
+        .catch(err => {
+          sendResponse({ success: false, error: err.message });
+        });
+      return true; // Keep response channel open for async response
+    } else if (message.type === 'PRM_DOWNLOAD_MEDIA') {
+      downloadPostMedia(message.shortcode, message.mediaUrls)
+        .then(media => {
+          sendResponse({ success: true, media });
+        })
+        .catch(err => {
+          sendResponse({ success: false, error: err.message });
+        });
+      return true; // Keep response channel open for async response
     }
     // Return true to indicate async response
     return true;

@@ -147,6 +147,14 @@ async function injectContentScripts(tabId, platform) {
       world: 'MAIN',
     });
 
+    if (platform === 'Instagram') {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content/inject.js'],
+        world: 'MAIN',
+      });
+    }
+
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['content/scraper.js'],
