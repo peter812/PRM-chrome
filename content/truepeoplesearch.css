@@ -1,0 +1,71 @@
+/**
+ * Styles for the PRM injections on truepeoplesearch.com.
+ *
+ * Loaded via the manifest content_scripts `css` field rather than an injected
+ * <style> element, so it is exempt from the page's Content-Security-Policy
+ * (a strict style-src can block content-script-inserted <style> tags).
+ */
+
+.prm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.4em 0.7em;
+  border-radius: 999px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.prm-chip--found { background: #065f46; color: #fff; }
+.prm-chip--notfound { background: #b91c1c; color: #fff; }
+.prm-chip--neutral { background: #e5e7eb; color: #374151; }
+.prm-chip--busy { background: #1d4ed8; color: #fff; }
+.prm-chip__dot {
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.prm-box {
+  font-family: Inter, system-ui, sans-serif;
+  border: 1px solid #d1d5db;
+  border-radius: 0.6rem;
+  padding: 0.85rem 1rem;
+  margin: 0.75rem 0;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.prm-box__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.prm-box__title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #111827;
+  letter-spacing: 0.02em;
+}
+.prm-btn {
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  border-radius: 999px;
+  padding: 0.45em 0.9em;
+  background: #065f46;
+  color: #fff;
+}
+.prm-btn:disabled { opacity: 0.6; cursor: default; }
+.prm-box__msg {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-top: 0.5rem;
+}

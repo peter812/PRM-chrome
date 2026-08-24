@@ -34,22 +34,61 @@ function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
 }
 
 /**
+ * Normalize a server URL, automatically adding http:// or https:// if omitted.
+ * @param {string} url
+ * @returns {string}
+ */
+function normalizeUrl(url) {
+  let trimmed = String(url || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (!/^https?:\/\//i.test(trimmed)) {
+    if (/^(localhost|127\.0\.0\.1|192\.168\.|10\.|0\.0\.0\.0)/i.test(trimmed)) {
+      trimmed = `http://${trimmed}`;
+    } else {
+      trimmed = `https://${trimmed}`;
+    }
+  }
+  return trimmed;
+}
+
+/**
  * Ping the PRM server to check it is online.
- * `GET {serverUrl}/api/v1/ping`
+ * Probes `/api/v1/ping` with fallback to common ping paths.
  *
  * @param {string} serverUrl — base URL of the PRM server
- * @returns {Promise<boolean>} — true if server responds with status "ok"
+ * @returns {Promise<{ ok: boolean, normalizedUrl: string, error?: string }>}
  */
 async function pingServer(serverUrl) {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/ping`;
-  try {
-    const res = await fetchWithTimeout(url, { method: 'GET' }, PING_TIMEOUT_MS);
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.status === 'ok';
-  } catch {
-    return false;
+  const normalized = normalizeUrl(serverUrl);
+  if (!normalized) {
+    return { ok: false, normalizedUrl: '', error: 'Please enter a valid server URL.' };
   }
+
+  const endpoints = ['/api/v1/ping', '/api/ping', '/ping', '/api/extension-auth/ping', ''];
+  let lastError = null;
+
+  for (const endpoint of endpoints) {
+    const url = `${normalized}${endpoint}`;
+    try {
+      const res = await fetchWithTimeout(url, { method: 'GET' }, PING_TIMEOUT_MS);
+      if (res.ok || (res.status === 401 && endpoint === '/api/extension-auth/ping')) {
+        return { ok: true, normalizedUrl: normalized };
+      }
+      lastError = `Server returned HTTP ${res.status} on ${endpoint || '/'}`;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        lastError = 'Connection timed out (5s). Is the server running?';
+      } else {
+        lastError = err.message || 'Cannot reach server';
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    normalizedUrl: normalized,
+    error: lastError || 'Could not connect to server. Check the URL and network.'
+  };
 }
 
 /**
@@ -140,10 +179,103 @@ async function searchPeople(serverUrl, token, query) {
     return { success: true, results };
   } catch (err) {
     if (err.name === 'AbortError') {
-      return { success: false, error: 'Request timed out. Check your connection.' };
+      return { success: false, error: 'Search request timed out.' };
     }
-    return { success: false, error: 'Network error. Check your connection.' };
+    return { success: false, error: 'Cannot connect to server. Check your connection.' };
   }
 }
 
-export { pingServer, verifyCode, pingSession, searchPeople };
+/**
+ * Send bulk scraped contacts to PRM server.
+ * `POST {serverUrl}/api/v1/scrape-results` or `POST /api/v1/contacts/bulk-import`
+ *
+ * @param {string} serverUrl
+ * @param {string} token
+ * @param {Array<Object>} contacts
+ * @param {Object} [meta]
+ * @returns {Promise<{ success: boolean, count?: number, error?: string }>}
+ */
+async function bulkImportScrapedContacts(serverUrl, token, contacts, meta = {}) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/scrape-results`;
+  try {
+    const payload = {
+      platform: 'Instagram',
+      type: 'bulk_scrape',
+      source: meta.source || 'followers_scraper',
+      targetAccount: meta.targetAccount || '',
+      contacts: contacts.map(c => ({
+        platform: 'Instagram',
+        username: c.username,
+        name: c.fullName || c.name || c.username,
+        avatarUrl: c.profilePicUrl || c.avatarUrl || '',
+        isVerified: !!c.isVerified,
+        isPrivate: !!c.isPrivate,
+        url: `https://instagram.com/${c.username}`,
+        notes: meta.targetAccount ? `Scraped from @${meta.targetAccount} (${meta.scrapeType || 'followers'})` : 'Scraped via PRM',
+      })),
+      timestamp: Date.now()
+    };
+
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Token': token,
+      },
+      body: JSON.stringify(payload),
+    }, 30_000);
+
+    if (res.status === 401) {
+      return { success: false, error: 'Session expired. Please reconnect.' };
+    }
+
+    if (!res.ok) {
+      return { success: false, error: `Server error (${res.status}).` };
+    }
+
+    return { success: true, count: contacts.length };
+  } catch (err) {
+    return { success: false, error: err.name === 'AbortError' ? 'Request timed out.' : 'Network error.' };
+  }
+}
+
+/**
+ * Send full pending account import payload to PRM server.
+ * `POST {serverUrl}/api/v1/pending-imports`
+ *
+ * @param {string} serverUrl
+ * @param {string} token
+ * @param {Object} payload
+ * @returns {Promise<{ success: boolean, id?: string, error?: string }>}
+ */
+async function sendPendingImport(serverUrl, token, payload) {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/pending-imports`;
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Token': token,
+      },
+      body: JSON.stringify(payload),
+    }, 60_000);
+
+    if (res.status === 401) {
+      return { success: false, error: 'Session expired. Please reconnect PRM.' };
+    }
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData.error || `Server error (${res.status}).` };
+    }
+
+    const data = await res.json().catch(() => ({}));
+    return { success: true, id: data.id || payload.uuid };
+  } catch (err) {
+    return { success: false, error: err.name === 'AbortError' ? 'Request timed out.' : 'Network error.' };
+  }
+}
+
+export { pingServer, verifyCode, pingSession, searchPeople, bulkImportScrapedContacts, sendPendingImport };
+
+

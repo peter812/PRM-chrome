@@ -326,6 +326,7 @@ function init() {
         data,
         timestamp: new Date().toISOString(),
       });
+      return false;
     } else if (message.type === 'PRM_GET_INSTAGRAM_FEED') {
       fetchFromInjectContext('loadUserFeed', { username: message.username })
         .then(result => {
@@ -350,8 +351,7 @@ function init() {
         });
       return true; // Keep response channel open for async response
     }
-    // Return true to indicate async response
-    return true;
+    return false;
   };
 
   chrome.runtime.onMessage.addListener(window.__prmMessageListener);

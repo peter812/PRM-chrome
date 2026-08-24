@@ -86,6 +86,16 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* When opened in a full browser tab instead of the popup */
+@media (min-width: 500px) {
+  body {
+    width: 100%;
+    max-width: 480px;
+    max-height: none;
+    margin: 32px auto;
+  }
+}
+
 /* --- Views ------------------------------------------- */
 .view {
   animation: fadeIn 0.2s ease-out;
@@ -303,6 +313,13 @@ p {
   background: var(--color-info-bg);
   color: var(--color-info-text);
   border: 1px solid var(--color-info-border);
+}
+
+.status-message.warning {
+  display: block;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning-border);
 }
 
 /* --- 4-Digit Code Input ------------------------------ */

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IG Follower Scraper</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    body {
+      width: 420px;
+      padding: 16px;
+      background: #fafafa;
+      color: #262626;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #dbdbdb;
+    }
+    .header h1 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #262626;
+    }
+    .badge {
+      background: #10b981;
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 12px;
+      text-transform: uppercase;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 4px;
+    }
+    input, select {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 13px;
+      border: 1px solid #dbdbdb;
+      border-radius: 6px;
+      background: white;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #0095f6;
+    }
+    .row {
+      display: flex;
+      gap: 10px;
+    }
+    .row .form-group {
+      flex: 1;
+    }
+    .btn {
+      width: 100%;
+      padding: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary {
+      background: #0095f6;
+      color: white;
+    }
+    .btn-primary:hover {
+      background: #1877f2;
+    }
+    .btn-danger {
+      background: #ed4956;
+      color: white;
+      margin-top: 8px;
+    }
+    .btn-success {
+      background: #10b981;
+      color: white;
+    }
+    .progress-box {
+      margin-top: 14px;
+      background: white;
+      border: 1px solid #dbdbdb;
+      border-radius: 6px;
+      padding: 12px;
+    }
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #efefef;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .progress-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: #0095f6;
+      transition: width 0.3s;
+    }
+    .status-text {
+      font-size: 12px;
+      color: #666;
+      min-height: 16px;
+    }
+    .export-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>IG Follower Scraper</h1>
+    <span class="badge">Unlimited Pro</span>
+  </div>
+
+  <div id="scrape-form">
+    <div class="form-group">
+      <label for="target-username">Target Username</label>
+      <input type="text" id="target-username" placeholder="e.g. instagram or @username" />
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label for="scrape-type">Type</label>
+        <select id="scrape-type">
+          <option value="followers">Followers</option>
+          <option value="following">Following</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="max-limit">Max Count</label>
+        <input type="number" id="max-limit" placeholder="Unlimited (0 or empty)" min="0" />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="delay-ms">Delay Between Requests (ms)</label>
+      <input type="number" id="delay-ms" value="1500" min="500" step="100" />
+    </div>
+
+    <button id="start-btn" class="btn btn-primary">Start Scraping</button>
+  </div>
+
+  <div id="progress-container" class="progress-box hidden">
+    <div class="progress-header">
+      <span id="target-label">Scraping...</span>
+      <span id="count-label">0 extracted</span>
+    </div>
+    <div class="progress-bar-bg">
+      <div id="progress-bar" class="progress-bar-fill"></div>
+    </div>
+    <div id="status-msg" class="status-text">Connecting to Instagram API...</div>
+    
+    <button id="stop-btn" class="btn btn-danger">Stop</button>
+
+    <div id="export-container" class="export-actions hidden">
+      <button id="export-csv-btn" class="btn btn-success">Export CSV</button>
+      <button id="export-json-btn" class="btn btn-primary">Export JSON</button>
+    </div>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

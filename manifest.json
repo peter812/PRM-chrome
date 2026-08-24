@@ -3,7 +3,7 @@
   "name": "PRM - People Relationship Manager",
   "version": "1.0.0",
   "description": "Connect to your PRM instance to search and manage contacts",
-  "permissions": ["activeTab", "storage", "scripting", "tabs", "alarms"],
+  "permissions": ["activeTab", "storage", "scripting", "tabs", "alarms", "cookies"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background/service-worker.js"
@@ -12,6 +12,15 @@
     {
       "matches": ["*://*.instagram.com/*"],
       "js": ["content/scraper.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.truepeoplesearch.com/*",
+        "*://truepeoplesearch.com/*"
+      ],
+      "js": ["content/truepeoplesearch.js"],
+      "css": ["content/truepeoplesearch.css"],
       "run_at": "document_idle"
     }
   ],

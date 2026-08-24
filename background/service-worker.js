@@ -703,11 +703,261 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
+/**
+ * Proxy a PRM API request from a content script.
+ *
+ * MV3 content scripts can't make privileged cross-origin fetches (they inherit
+ * the page origin and are subject to CORS). The service worker retains the
+ * extension's host-permission privileges, so it performs the request here and
+ * returns a plain result object.
+ *
+ * @param {{ path: string, method?: string, body?: any }} req
+ * @returns {Promise<{ ok: boolean, status?: number, data?: any, error?: string, notConnected?: boolean }>}
+ */
+async function prmApiFetch({ path, method = 'GET', body }) {
+  const config = await getStoredConfig();
+  if (!config.serverUrl || !config.sessionToken) {
+    return { ok: false, notConnected: true, error: 'PRM not connected. Open the extension and pair.' };
+  }
+  const url = `${config.serverUrl.replace(/\/+$/, '')}${path}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Token': config.sessionToken,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.status === 401) return { ok: false, status: 401, error: 'Session expired. Reconnect PRM.' };
+    if (!res.ok) return { ok: false, status: res.status, error: `Server error (${res.status}).` };
+    const data = await res.json().catch(() => ({}));
+    return { ok: true, status: res.status, data };
+  } catch (err) {
+    clearTimeout(timer);
+    return { ok: false, error: err.name === 'AbortError' ? 'Request timed out.' : 'Network error.' };
+  }
+}
+
 // Runtime messaging listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'START_FULL_ACCOUNT_IMPORT') {
+    runBackgroundFullAccountImport(message);
+    sendResponse({ success: true });
+    return false;
+  }
   if (message.type === 'START_POST_IMPORT') {
     runBackgroundPostImport(message);
     sendResponse({ success: true });
     return false;
   }
+  if (message.type === 'CLEAR_IG_SCRAPED_DATA') {
+    chrome.storage.local.remove(['prm_ig_scrape_task', 'prm_ig_scraped_contacts'], () => {
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+  if (message.type === 'PRM_TPS_API') {
+    prmApiFetch(message).then(sendResponse);
+    return true;
+  }
+  return false;
 });
+
+/**
+ * Helper to convert array of user objects to raw CSV in background service worker.
+ */
+function arrayToCsvSW(users) {
+  const headers = ['id', 'username', 'full_name', 'is_private', 'is_verified', 'profile_pic_url'];
+  if (!Array.isArray(users) || users.length === 0) {
+    return headers.join(',');
+  }
+  const rows = users.map((u) => [
+    `"${String(u.id || '').replace(/"/g, '""')}"`,
+    `"${String(u.username || '').replace(/"/g, '""')}"`,
+    `"${String(u.fullName || u.full_name || '').replace(/"/g, '""')}"`,
+    u.isPrivate ?? u.is_private ?? false,
+    u.isVerified ?? u.is_verified ?? false,
+    `"${String(u.profilePicUrl || u.profile_pic_url || '').replace(/"/g, '""')}"`,
+  ].join(','));
+  return [headers.join(','), ...rows].join('\r\n');
+}
+
+/**
+ * Perform background full account scrape & post pending import payload to PRM server.
+ */
+async function runBackgroundFullAccountImport({ username }) {
+  const cleanUsername = String(username || '').trim().replace(/^@/, '');
+  const startTime = Date.now();
+
+  async function updateStatus(status, msg, isFinished = false, errorMsg = null) {
+    const jobStatus = {
+      active: !isFinished,
+      username: cleanUsername,
+      status,
+      message: msg,
+      error: errorMsg,
+      startTime,
+      lastUpdated: Date.now()
+    };
+    await chrome.storage.local.set({ prm_full_import_job_status: jobStatus });
+  }
+
+  try {
+    const config = await getStoredConfig();
+    if (!config.serverUrl || !config.sessionToken) {
+      throw new Error('PRM is not connected. Please pair the extension first.');
+    }
+
+    await updateStatus('info', `Resolving Instagram user @${cleanUsername}...`);
+
+    const headers = {
+      'accept': '*/*',
+      'x-asbd-id': '198387',
+      'x-ig-app-id': '936619743392459',
+    };
+
+    // 1. Resolve numeric User ID
+    let userId = null;
+    let basicName = '';
+    try {
+      const res = await fetch(`https://www.instagram.com/web/search/topsearch/?context=blended&query=${encodeURIComponent(cleanUsername)}&include_reel=false`, {
+        headers, credentials: 'include'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const match = data.users?.find(u => u.user.username.toLowerCase() === cleanUsername.toLowerCase());
+        if (match) {
+          userId = match.user.pk;
+          basicName = match.user.full_name || '';
+        }
+      }
+    } catch (_) {}
+
+    if (!userId) {
+      throw new Error(`Could not find Instagram user @${cleanUsername}. Make sure you are logged into Instagram.`);
+    }
+
+    // 2. Fetch getUserInfo(userId) for detailed metadata
+    await updateStatus('info', `Fetching profile info for @${cleanUsername}...`);
+    let userInfo = {};
+    try {
+      const infoRes = await fetch(`https://i.instagram.com/api/v1/users/${userId}/info/`, {
+        headers, credentials: 'include'
+      });
+      if (infoRes.ok) {
+        const infoData = await infoRes.json();
+        userInfo = infoData.user || {};
+      }
+    } catch (_) {}
+
+    // 3. Helper to scrape graph edges (followers / following)
+    const scrapeGraph = async (type) => {
+      const queryHash = type === 'following' ? '58712303d941c6855d4e888c5f0cd22f' : '37479f2b8209594dde7facb0d904896a';
+      const edgeKey = type === 'following' ? 'edge_follow' : 'edge_followed_by';
+      let endCursor = '', hasNextPage = true;
+      const results = [];
+
+      while (hasNextPage) {
+        const variables = { id: String(userId), include_reel: false, fetch_mutual: false, first: 50 };
+        if (endCursor) variables.after = endCursor;
+
+        const url = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
+        let resData = null;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const res = await fetch(url, { headers, credentials: 'include' });
+          if (res.status === 429) {
+            await new Promise(r => setTimeout(r, (attempt + 1) * 5000));
+            continue;
+          }
+          if (res.ok) {
+            resData = await res.json();
+            break;
+          }
+        }
+
+        if (!resData?.data?.user) break;
+        const edge = resData.data.user[edgeKey];
+        if (!edge?.edges?.length) break;
+
+        const batch = edge.edges.map(e => ({
+          id: e.node.id,
+          username: e.node.username,
+          fullName: e.node.full_name,
+          isPrivate: e.node.is_private,
+          isVerified: e.node.is_verified,
+          profilePicUrl: e.node.profile_pic_url
+        }));
+
+        results.push(...batch);
+        endCursor = edge.page_info?.end_cursor || '';
+        hasNextPage = edge.page_info?.has_next_page && !!endCursor;
+
+        await updateStatus('info', `Scraping ${type} for @${cleanUsername} (${results.length} collected)...`);
+        await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
+      }
+      return results;
+    };
+
+    // Scrape Followers
+    await updateStatus('info', `Scraping followers for @${cleanUsername}...`);
+    const followers = await scrapeGraph('followers');
+
+    // Scrape Following
+    await updateStatus('info', `Scraping following for @${cleanUsername}...`);
+    const following = await scrapeGraph('following');
+
+    const followersCsv = arrayToCsvSW(followers);
+    const followingCsv = arrayToCsvSW(following);
+
+    const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `import_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    const payload = {
+      uuid,
+      timestamp_added: new Date().toISOString(),
+      timestamp_imported: null,
+      already_added: false,
+      account_username: userInfo.username || cleanUsername,
+      account_display_name: userInfo.full_name || basicName || cleanUsername,
+      account_bio: userInfo.biography || '',
+      account_website: userInfo.external_url || '',
+      account_email: userInfo.public_email || '',
+      account_phone: userInfo.contact_phone_number || '',
+      account_location_area: userInfo.category || '',
+      account_followers: followersCsv,
+      account_following: followingCsv
+    };
+
+    await updateStatus('info', `Sending pending import payload to PRM server...`);
+
+    const postUrl = `${config.serverUrl.replace(/\/+$/, '')}/api/v1/pending-imports`;
+    const postRes = await fetch(postUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Token': config.sessionToken
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!postRes.ok) {
+      const errText = await postRes.text().catch(() => '');
+      throw new Error(`Server returned HTTP ${postRes.status}: ${errText}`);
+    }
+
+    await updateStatus('success', `Import complete! Sent ${followers.length} followers and ${following.length} following to PRM pending imports.`, true);
+
+  } catch (err) {
+    console.error('[PRM] Background full account import error:', err);
+    await updateStatus('error', `Import failed: ${err.message || 'unknown error'}`, true, err.message);
+  }
+}
+
+
