@@ -199,7 +199,7 @@ export function buildAccountPayload(scraped, fallbackUsername) {
 }
 
 /** Payload for a follower/following walk, from the injected graph extractor. */
-export function buildGraphPayload({ profile, followers, following }, fallbackUsername) {
+export function buildGraphPayload({ profile = {}, followers = [], following = [] } = {}, fallbackUsername) {
   return {
     ...basePayload(profile.username || fallbackUsername),
     import_type: 'full',

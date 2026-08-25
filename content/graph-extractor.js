@@ -50,32 +50,58 @@ if (!self.__prmGraphExtractorReady) {
     if (!res.ok) throw new Error(`Could not search for @${clean} (HTTP ${res.status})`);
 
     const data = await res.json();
-    const match = data.users?.find((u) => u.user.username.toLowerCase() === clean.toLowerCase());
-    if (!match) throw new Error(`Instagram user @${clean} not found.`);
-    return match.user.pk;
+    const match = data.users?.find((u) => {
+      const uname = u?.user?.username || u?.username || '';
+      return uname.toLowerCase() === clean.toLowerCase();
+    });
+    const pk = match?.user?.pk || match?.user?.id || match?.pk || match?.id;
+    if (!pk) throw new Error(`Instagram user @${clean} not found.`);
+    return pk;
   }
 
   /** Profile metadata — bio, links, public contact details, totals. */
-  async function fetchProfile(userId) {
-    const res = await fetch(`https://i.instagram.com/api/v1/users/${userId}/info/`, {
-      headers: HEADERS,
-      credentials: 'include',
-    });
-    if (!res.ok) throw new Error(`Could not load profile ${userId} (HTTP ${res.status})`);
+  async function fetchProfile(userId, username) {
+    const clean = String(username || '').trim().replace(/^@/, '');
+    const endpoints = [
+      `https://www.instagram.com/api/v1/users/${userId}/info/`,
+      `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(clean)}`,
+    ];
 
-    const { user } = await res.json();
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, { headers: HEADERS, credentials: 'include' });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const user = data.user || data.data?.user;
+        if (user) {
+          return {
+            username: user.username || clean,
+            fullName: user.full_name || '',
+            profilePicUrl: user.hd_profile_pic_url_info?.url || user.profile_pic_url_hd || user.profile_pic_url || '',
+            biography: user.biography || '',
+            externalUrl: user.external_url || '',
+            publicEmail: user.public_email || '',
+            contactPhoneNumber: user.contact_phone_number || '',
+            category: user.category_name || user.category || '',
+            followerCount: user.follower_count || user.edge_followed_by?.count || 0,
+            followingCount: user.following_count || user.edge_follow?.count || 0,
+          };
+        }
+      } catch (_) {}
+    }
+
+    // Fallback if metadata endpoint is restricted, allowing the follower walk to proceed
     return {
-      username: user.username,
-      fullName: user.full_name,
-      // Prefer the HD variant; both are short-lived signed CDN URLs.
-      profilePicUrl: user.hd_profile_pic_url_info?.url || user.profile_pic_url || '',
-      biography: user.biography,
-      externalUrl: user.external_url,
-      publicEmail: user.public_email || '',
-      contactPhoneNumber: user.contact_phone_number || '',
-      category: user.category || '',
-      followerCount: user.follower_count,
-      followingCount: user.following_count,
+      username: clean,
+      fullName: '',
+      profilePicUrl: '',
+      biography: '',
+      externalUrl: '',
+      publicEmail: '',
+      contactPhoneNumber: '',
+      category: '',
+      followerCount: 0,
+      followingCount: 0,
     };
   }
 
@@ -137,14 +163,16 @@ if (!self.__prmGraphExtractorReady) {
         throw new Error(`Unexpected ${type} response — Instagram may require re-authentication.`);
       }
 
-      collected.push(...edge.edges.map((e) => ({
-        id: e.node.id,
-        username: e.node.username,
-        fullName: e.node.full_name,
-        isPrivate: e.node.is_private,
-        isVerified: e.node.is_verified,
-        profilePicUrl: e.node.profile_pic_url,
-      })));
+      collected.push(...edge.edges
+        .filter((e) => e?.node)
+        .map((e) => ({
+          id: e.node.id || '',
+          username: e.node.username || '',
+          fullName: e.node.full_name || '',
+          isPrivate: Boolean(e.node.is_private),
+          isVerified: Boolean(e.node.is_verified),
+          profilePicUrl: e.node.profile_pic_url || '',
+        })));
 
       cursor = edge.page_info?.end_cursor || '';
       hasNextPage = Boolean(edge.page_info?.has_next_page && cursor);
@@ -162,7 +190,7 @@ if (!self.__prmGraphExtractorReady) {
     const userId = await resolveUserId(username);
 
     report(jobId, 'profile', `Reading profile for @${username}...`);
-    const profile = await fetchProfile(userId);
+    const profile = await fetchProfile(userId, username);
 
     const followers = await walk(jobId, userId, 'followers', maxRecords, signal);
     const following = await walk(jobId, userId, 'following', maxRecords, signal);
