@@ -438,10 +438,22 @@
 
   // ── Entry point ────────────────────────────────────────────────────────────────
 
+  let resultsDebounceTimer = null;
+  function observeResultsMutations() {
+    const observer = new MutationObserver(() => {
+      if (resultsDebounceTimer) clearTimeout(resultsDebounceTimer);
+      resultsDebounceTimer = setTimeout(() => {
+        handleResultsPage();
+      }, 300);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
   function init() {
     const path = location.pathname;
     if (/^\/results/i.test(path)) {
       handleResultsPage();
+      observeResultsMutations();
     } else if (/^\/find\/person\//i.test(path)) {
       handlePersonPage();
     }

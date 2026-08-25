@@ -55,10 +55,18 @@ function remove(keys) {
  * @returns {Promise<{ serverUrl: string|null, sessionToken: string|null, sessionId: string|null }>}
  */
 async function getStoredConfig() {
-  const serverUrl = await get(STORAGE_KEYS.SERVER_URL);
-  const sessionToken = await get(STORAGE_KEYS.SESSION_TOKEN);
-  const sessionId = await get(STORAGE_KEYS.SESSION_ID);
-  return { serverUrl, sessionToken, sessionId };
+  return new Promise((resolve) => {
+    chrome.storage.local.get(
+      [STORAGE_KEYS.SERVER_URL, STORAGE_KEYS.SESSION_TOKEN, STORAGE_KEYS.SESSION_ID],
+      (data) => {
+        resolve({
+          serverUrl: data[STORAGE_KEYS.SERVER_URL] ?? null,
+          sessionToken: data[STORAGE_KEYS.SESSION_TOKEN] ?? null,
+          sessionId: data[STORAGE_KEYS.SESSION_ID] ?? null,
+        });
+      },
+    );
+  });
 }
 
 /**
@@ -69,9 +77,16 @@ async function getStoredConfig() {
  * @returns {Promise<void>}
  */
 async function saveConfig(serverUrl, sessionToken, sessionId) {
-  await set(STORAGE_KEYS.SERVER_URL, serverUrl);
-  await set(STORAGE_KEYS.SESSION_TOKEN, sessionToken);
-  await set(STORAGE_KEYS.SESSION_ID, sessionId);
+  return new Promise((resolve) => {
+    chrome.storage.local.set(
+      {
+        [STORAGE_KEYS.SERVER_URL]: serverUrl,
+        [STORAGE_KEYS.SESSION_TOKEN]: sessionToken,
+        [STORAGE_KEYS.SESSION_ID]: sessionId,
+      },
+      resolve,
+    );
+  });
 }
 
 /**

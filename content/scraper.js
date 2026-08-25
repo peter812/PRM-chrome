@@ -13,6 +13,10 @@
 /* eslint-disable no-console */
 
 (() => {
+if (window.__prmScraperLoaded) return;
+window.__prmScraperLoaded = true;
+
+const sharedParser = new DOMParser();
 
 /**
  * Decode HTML entities in a string (e.g. &#064; → @, &quot; → ").
@@ -20,9 +24,9 @@
  * @returns {string}
  */
 function decodeHtmlEntities(str) {
-  const textarea = document.createElement('textarea');
-  textarea.innerHTML = str;
-  return textarea.value;
+  if (!str) return '';
+  const doc = sharedParser.parseFromString(str, 'text/html');
+  return doc.documentElement.textContent || '';
 }
 
 /**
@@ -219,7 +223,7 @@ function fetchFromInjectContext(procedure, payload = {}) {
         resolve(event.data);
       }
     };
-    window.postMessage({ procedure, ...payload }, "*", [channel.port2]);
+    window.postMessage({ procedure, ...payload }, window.location.origin, [channel.port2]);
   });
 }
 
@@ -281,13 +285,20 @@ async function downloadUrlAsBase64(url) {
  */
 async function downloadPostMedia(shortcode, mediaUrls) {
   const downloadedMedia = [];
+  const mimeMap = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+
   for (let i = 0; i < mediaUrls.length; i++) {
     const item = mediaUrls[i];
     try {
       const base64Data = await downloadUrlAsBase64(item.url);
-      const ext = base64Data.split(';')[0].split('/')[1] || 'jpg';
-      // Clean up extension names (e.g. jpeg -> jpg)
-      const cleanExt = ext === 'jpeg' ? 'jpg' : ext;
+      const mime = (base64Data.split(';')[0].split(':')[1] || '').toLowerCase();
+      const cleanExt = mimeMap[mime] || 'jpg';
       downloadedMedia.push({
         type: item.type,
         filename: `${shortcode}_${i}.${cleanExt}`,

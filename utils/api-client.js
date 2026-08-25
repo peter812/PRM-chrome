@@ -42,13 +42,19 @@ function normalizeUrl(url) {
   let trimmed = String(url || '').trim().replace(/\/+$/, '');
   if (!trimmed) return '';
   if (!/^https?:\/\//i.test(trimmed)) {
-    if (/^(localhost|127\.0\.0\.1|192\.168\.|10\.|0\.0\.0\.0)/i.test(trimmed)) {
-      trimmed = `http://${trimmed}`;
-    } else {
-      trimmed = `https://${trimmed}`;
-    }
+    const isLoopback = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(trimmed);
+    trimmed = isLoopback ? `http://${trimmed}` : `https://${trimmed}`;
   }
-  return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    const isLoopback = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (parsed.protocol === 'http:' && !isLoopback) {
+      parsed.protocol = 'https:';
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed;
+  }
 }
 
 /**
@@ -143,9 +149,9 @@ async function pingSession(serverUrl, token) {
       method: 'POST',
       headers: { 'X-Extension-Token': token },
     });
-    return res.ok;
+    return { ok: res.ok, status: res.status };
   } catch {
-    return false;
+    return { ok: false, status: 0, isNetworkError: true };
   }
 }
 

@@ -4,27 +4,35 @@
 (() => {
     "use strict";
 
+    if (window.__prmInjectReady) return;
+    window.__prmInjectReady = true;
+
     // -------------------------------------------------------------
     // 1. Navigation / History Interceptor
     // -------------------------------------------------------------
+    function normalizeUrlArg(urlArg) {
+        if (!urlArg) return urlArg;
+        const str = typeof urlArg === "string" ? urlArg : (urlArg instanceof URL ? urlArg.href : String(urlArg));
+        if (str.startsWith("https://") && str.includes("?img_index=")) {
+            return "?" + str.split("?")[1];
+        }
+        return urlArg;
+    }
+
     function initHistoryInterceptor() {
         const originalPushState = history.pushState;
-        history.pushState = function() {
-            if (arguments[2] && arguments[2].startsWith("https://") && arguments[2].includes("?img_index=")) {
-                arguments[2] = "?" + arguments[2].split("?")[1];
-            }
-            const result = originalPushState.apply(this, arguments);
+        history.pushState = function(...args) {
+            if (args[2]) args[2] = normalizeUrlArg(args[2]);
+            const result = originalPushState.apply(this, args);
             window.dispatchEvent(new Event("pushstate"));
             window.dispatchEvent(new Event("locationchange"));
             return result;
         };
 
         const originalReplaceState = history.replaceState;
-        history.replaceState = function() {
-            if (arguments[2] && arguments[2].startsWith("https://") && arguments[2].includes("?img_index=")) {
-                arguments[2] = "?" + arguments[2].split("?")[1];
-            }
-            const result = originalReplaceState.apply(this, arguments);
+        history.replaceState = function(...args) {
+            if (args[2]) args[2] = normalizeUrlArg(args[2]);
+            const result = originalReplaceState.apply(this, args);
             window.dispatchEvent(new Event("replacestate"));
             window.dispatchEvent(new Event("locationchange"));
             return result;
@@ -44,81 +52,89 @@
 
         // Message receiver to load post details using Instagram's internal modules
         window.addEventListener("message", async (event) => {
-            if (event.origin === "https://www.instagram.com" && event.ports && event.ports.length > 0 && event.data && event.data.procedure) {
-                const data = event.data;
-                if (data.procedure === "loadPostFromShortcode") {
-                    const shortcode = data.shortcode;
-                    try {
-                        const cometRelay = window.require("CometRelay");
-                        const polarisEnv = window.require("PolarisRelayEnvironment");
-                        const postQuery = window.require("PolarisPostActionLoadPostQuery").POST_QUERY;
+            if (event.source !== window || event.origin !== window.location.origin) return;
+            if (!event.ports || event.ports.length === 0 || !event.data || !event.data.procedure) return;
 
-                        const response = await cometRelay.fetchQuery(polarisEnv, postQuery, {
-                            child_comment_count: 3,
-                            fetch_comment_count: 40,
-                            has_threaded_comments: true,
-                            parent_comment_count: 24,
-                            shortcode: shortcode
-                        }).toPromise();
+            const data = event.data;
+            if (data.procedure === "loadPostFromShortcode") {
+                const shortcode = data.shortcode;
+                try {
+                    const cometRelay = window.require("CometRelay");
+                    const polarisEnv = window.require("PolarisRelayEnvironment");
+                    const postQuery = window.require("PolarisPostActionLoadPostQuery").POST_QUERY;
 
-                        const inlineFragment = response.xdt_shortcode_media.__fragments.PolarisPostActionLoadPostQueryInlineFragment 
-                            || response.xdt_shortcode_media.__fragments.PolarisPostActionLoadPostQueryInlineFragmentWithoutRelatedProfiles;
+                    const response = await cometRelay.fetchQuery(polarisEnv, postQuery, {
+                        child_comment_count: 3,
+                        fetch_comment_count: 40,
+                        has_threaded_comments: true,
+                        parent_comment_count: 24,
+                        shortcode: shortcode
+                    }).toPromise();
 
-                        event.ports[0].postMessage(inlineFragment);
-                    } catch (err) {
-                        console.error("Failed to load post from shortcode " + shortcode + ":", err);
-                        event.ports[0].postMessage(undefined);
-                    }
-                    return;
+                    const inlineFragment = response.xdt_shortcode_media.__fragments.PolarisPostActionLoadPostQueryInlineFragment 
+                        || response.xdt_shortcode_media.__fragments.PolarisPostActionLoadPostQueryInlineFragmentWithoutRelatedProfiles;
+
+                    event.ports[0].postMessage(inlineFragment);
+                } catch (err) {
+                    console.error("Failed to load post from shortcode " + shortcode + ":", err);
+                    event.ports[0].postMessage(undefined);
                 }
-                
-                if (data.procedure === "loadUserFeed") {
-                    const username = data.username;
-                    try {
-                        InstagramApi.init();
-                        const api = InstagramApi._instances[PolarisModules.INSTA_API];
-                        if (!api) {
-                            event.ports[0].postMessage({ success: false, error: "PolarisInstapi not found" });
-                            return;
-                        }
-                        const response = await api.apiGet(`/api/v1/feed/user/${username}/username/`);
-                        event.ports[0].postMessage({ success: true, feed: response.data });
-                    } catch (err) {
-                        console.error("Failed to load user feed for " + username + ":", err);
-                        event.ports[0].postMessage({ success: false, error: err.message || String(err) });
-                    }
-                    return;
-                }
-                
-                event.ports[0].postMessage(undefined);
+                return;
             }
+            
+            if (data.procedure === "loadUserFeed") {
+                const username = data.username;
+                try {
+                    InstagramApi.init();
+                    const api = InstagramApi._instances[PolarisModules.INSTA_API];
+                    if (!api) {
+                        event.ports[0].postMessage({ success: false, error: "PolarisInstapi not found" });
+                        return;
+                    }
+                    const response = await api.apiGet(`/api/v1/feed/user/${username}/username/`);
+                    event.ports[0].postMessage({ success: true, feed: response.data });
+                } catch (err) {
+                    console.error("Failed to load user feed for " + username + ":", err);
+                    event.ports[0].postMessage({ success: false, error: err.message || String(err) });
+                }
+                return;
+            }
+            
+            event.ports[0].postMessage(undefined);
         });
 
-        // Claim helper
+        // Claim helper with capped retries
+        let claimRetries = 0;
         function updateClaim() {
             try {
                 sessionStorage.setItem("__ig_www_claim", window.require("PolarisWWWClaim").getWWWClaim());
             } catch (err) {
-                setTimeout(updateClaim, 100);
+                if (++claimRetries < 20) {
+                    setTimeout(updateClaim, 100);
+                }
             }
         }
 
-        // App ID helper
+        // App ID helper with capped retries
+        let appIdRetries = 0;
         function updateAppId() {
             try {
                 sessionStorage.setItem("__ig_app_id", window.require("PolarisConfig").getIGAppID());
             } catch (err) {
-                setTimeout(updateAppId, 100);
+                if (++appIdRetries < 20) {
+                    setTimeout(updateAppId, 100);
+                }
             }
         }
 
-        // Require status check
+        // Require status check with capped retries
+        let requireRetries = 0;
         function checkRequire() {
             const hasRequire = typeof window.require === "function" ? "1" : "";
             if (hasRequire !== sessionStorage.getItem("__ig_has_require")) {
                 sessionStorage.setItem("__ig_has_require", hasRequire);
             }
-            if (!hasRequire) {
+            if (!hasRequire && ++requireRetries < 20) {
                 setTimeout(checkRequire, 1000);
             }
         }
@@ -228,30 +244,32 @@
 
             container.querySelectorAll("._aatk._aiao > div").forEach(el => {
                 const id = extractIdFromReactFiber(el);
-                if (id && isValidId(id)) el.setAttribute("__igdl_id", id);
+                if (id && isValidId(id) && el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
             });
 
             container.querySelectorAll("video").forEach(el => {
                 const id = extractIdFromReactFiber(el);
-                if (id && isValidId(id)) el.setAttribute("__igdl_id", id);
+                if (id && isValidId(id) && el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
             });
 
             container.querySelectorAll("article").forEach(el => {
                 const id = extractIdFromReactFiber(el);
-                if (id && isValidId(id)) el.setAttribute("__igdl_id", id);
+                if (id && isValidId(id) && el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
             });
 
             container.querySelectorAll("a._a6hd").forEach(el => {
                 const id = extractIdFromReactFiber(el);
-                if (id && isValidId(id)) el.setAttribute("__igdl_id", id);
+                if (id && isValidId(id) && el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
             });
 
             const complexSelector = ".x9f619.xjbqb8w.x1lliihq.x168nmei.x13lgxp2.x5pf9jr.xo71vjh.x1n2onr6.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.xdt5ytf.xqjyukv.x1qjc9v5.x1oa3qoh.x1nhvcw1";
             container.querySelectorAll(complexSelector).forEach(el => {
                 const id = extractIdFromReactFiber(el);
                 if (id && isValidId(id)) {
-                    el.setAttribute("__igdl_id", id);
-                    el.querySelectorAll("a._a6hd").forEach(child => child.setAttribute("__igdl_id", id));
+                    if (el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
+                    el.querySelectorAll("a._a6hd").forEach(child => {
+                        if (child.getAttribute("__igdl_id") !== id) child.setAttribute("__igdl_id", id);
+                    });
                 }
             });
 
@@ -259,38 +277,54 @@
                 if (el.parentNode && el.parentNode.parentNode) {
                     const id = extractIdFromReactFiber(el.parentNode.parentNode);
                     if (id && isValidId(id)) {
-                        el.setAttribute("__igdl_id", id);
+                        if (el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
                         return;
                     }
                 }
                 if (el.parentNode && el.parentNode.parentNode && el.parentNode.parentNode.parentNode) {
                     const id = extractIdFromReactFiber(el.parentNode.parentNode.parentNode);
                     if (id && isValidId(id)) {
-                        el.setAttribute("__igdl_id", id);
+                        if (el.getAttribute("__igdl_id") !== id) el.setAttribute("__igdl_id", id);
                     }
                 }
             });
         }
 
-        const observerConfig = { attributes: true, childList: true, subtree: true };
+        const observerConfig = {
+            attributes: true,
+            attributeFilter: ["class", "style"],
+            childList: true,
+            subtree: true
+        };
+
+        let isTagging = false;
         const observer = new MutationObserver((mutations) => {
-            for (const mutation of mutations) {
-                if (mutation.addedNodes[0] && typeof mutation.addedNodes[0].querySelector === "function") {
-                    tagElementsWithId(mutation.addedNodes[0]);
+            if (isTagging) return;
+            isTagging = true;
+            try {
+                for (const mutation of mutations) {
+                    if (mutation.type === "childList") {
+                        for (const node of mutation.addedNodes) {
+                            if (node.nodeType === Node.ELEMENT_NODE) {
+                                tagElementsWithId(node);
+                            }
+                        }
+                    }
                 }
-                if (mutation.target && typeof mutation.target.querySelector === "function") {
-                    tagElementsWithId(mutation.target);
-                }
+            } finally {
+                isTagging = false;
             }
         });
 
         function startObserver() {
             try {
                 const body = document.querySelector("body");
-                observer.observe(body, observerConfig);
-                tagElementsWithId(body);
+                if (body) {
+                    observer.observe(body, observerConfig);
+                    tagElementsWithId(body);
+                }
             } catch (err) {
-                setTimeout(startObserver, 50);
+                setTimeout(startObserver, 100);
             }
         }
         startObserver();
@@ -410,8 +444,9 @@
         }
 
         handleMessages(event) {
+            if (event.source !== window || event.origin !== window.location.origin) return;
             const message = event.data;
-            if (!message) return;
+            if (!message || typeof message !== "object") return;
 
             const { type, payload } = message;
             if (this._subscribers[type]) {
@@ -440,7 +475,7 @@
         }
 
         sendMessage(type, payload) {
-            window.postMessage({ type, payload });
+            window.postMessage({ type, payload }, window.location.origin);
         }
     }
 
@@ -463,7 +498,7 @@
 
     class RouteParser {
         static isStoriesRoute(path) {
-            return /^\/?stories\/[a-zA-Z0-9._]{3,}\/([\d]+)?\/?(?:[?&a-zA-Z0-9=%\-_.~])*?$/gs.test(path);
+            return /^\/?stories\/[a-zA-Z0-9._]{3,}\/([\d]+)?\/?(?:[?&a-zA-Z0-9=%\-_.~])*?$/s.test(path);
         }
 
         static parseUrlData(structure, actualPath) {
@@ -607,21 +642,16 @@
                         if (!stringParts) return true;
 
                         if (headerContainer.parentElement) {
-                            const viewStoryBtn = document.evaluate(
-                                `//div[@role='button' and .='${stringParts.viewStory}']`, 
-                                headerContainer.parentElement.parentElement || document.body, 
-                                null, 
-                                XPathResult.ANY_UNORDERED_NODE_TYPE, 
-                                null
-                            ).singleNodeValue;
+                            const parentEl = headerContainer.parentElement.parentElement || document.body;
+                            const buttons = parentEl.querySelectorAll('div[role="button"]');
+                            const viewStoryBtn = Array.from(buttons).find(
+                                (b) => stringParts.viewStory && b.textContent.trim() === stringParts.viewStory
+                            );
 
-                            const subtitleEl = document.evaluate(
-                                `//div[contains(., '${stringParts.subtitleText}')]`, 
-                                headerContainer.parentElement.parentElement || document.body, 
-                                null, 
-                                XPathResult.ANY_UNORDERED_NODE_TYPE, 
-                                null
-                            ).singleNodeValue;
+                            const allDivs = parentEl.querySelectorAll('div');
+                            const subtitleEl = Array.from(allDivs).find(
+                                (d) => stringParts.subtitleText && d.textContent.includes(stringParts.subtitleText)
+                            );
 
                             if (viewStoryBtn || subtitleEl) {
                                 return false;

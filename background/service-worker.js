@@ -12,7 +12,14 @@
 
 /* global chrome */
 
-// ── Inline helpers (ES module imports not available in MV3 service workers) ──
+import { sendPendingImport } from '../utils/api-client.js';
+import {
+  inPageAccountExtractor,
+  buildAccountPayload,
+  buildGraphPayload,
+} from '../utils/extraction.js';
+
+// ── Inline helpers ──
 
 /**
  * Supported platform patterns (mirrors utils/url-matcher.js).
@@ -87,9 +94,9 @@ async function pingSession(serverUrl, token) {
       signal: controller.signal,
     });
     clearTimeout(timer);
-    return res.ok;
+    return { ok: res.ok, status: res.status };
   } catch {
-    return false;
+    return { ok: false, status: 0, isNetworkError: true };
   }
 }
 
@@ -111,24 +118,17 @@ function updateBadge(tabId, matched) {
 
 // ── Periodic session ping ────────────────────────────────
 
-// Create alarm only if it doesn't already exist
-chrome.alarms.get('ping-prm', (existing) => {
-  if (!existing) {
-    chrome.alarms.create('ping-prm', { periodInMinutes: 5 });
-  }
-});
-
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'ping-prm') return;
 
   const config = await getStoredConfig();
   if (config.serverUrl && config.sessionToken) {
-    const isValid = await pingSession(config.serverUrl, config.sessionToken);
-    if (!isValid) {
+    const result = await pingSession(config.serverUrl, config.sessionToken);
+    if (result.status === 401) {
       await clearConfig();
       chrome.action.setBadgeText({ text: '!' });
       chrome.action.setBadgeBackgroundColor({ color: '#EF4444' });
-    } else {
+    } else if (result.ok) {
       chrome.action.setBadgeText({ text: '' });
     }
   }
@@ -197,7 +197,7 @@ async function cacheResult(result) {
     chrome.storage.local.get(['prm_results'], (data) => {
       const results = data.prm_results ?? [];
       results.push(result);
-      const trimmed = results.slice(-200);
+      const trimmed = results.slice(-50);
       chrome.storage.local.set({ prm_results: trimmed }, resolve);
     });
   });
@@ -241,6 +241,11 @@ const injectedTabs = new Set();
 chrome.runtime.onInstalled.addListener(() => {
   // eslint-disable-next-line no-console
   console.log('[PRM] Chrome Extension installed.');
+  chrome.alarms.get('ping-prm', (existing) => {
+    if (!existing) {
+      chrome.alarms.create('ping-prm', { periodInMinutes: 5 });
+    }
+  });
 });
 
 /**
@@ -589,7 +594,8 @@ async function runBackgroundPostImport({ onlyLatest, tabId, username }) {
           ? `prm-debug-import-latest-${Date.now()}.txt`
           : `prm-debug-import-posts-${Date.now()}.txt`;
         pending.push({ filename, content: log });
-        chrome.storage.local.set({ prm_pending_debug_logs: pending });
+        const trimmed = pending.slice(-20);
+        chrome.storage.local.set({ prm_pending_debug_logs: trimmed });
       });
     }
   }
@@ -598,6 +604,8 @@ async function runBackgroundPostImport({ onlyLatest, tabId, username }) {
 // ── Debug Tracing for Service Worker Outgoing Requests ──
 
 let originalFetch = globalThis.fetch;
+let cachedDebugMode = false;
+let cachedServerUrl = null;
 
 function enableBackgroundFetchHook() {
   if (globalThis.fetch === originalFetch) {
@@ -613,17 +621,10 @@ function enableBackgroundFetchHook() {
         method = init.method.toUpperCase();
       }
 
-      const data = await new Promise((resolve) => {
-        chrome.storage.local.get(['prmServerUrl', 'prmDebugMode'], resolve);
-      });
-
-      const isDebug = data.prmDebugMode === true;
-      const serverUrl = data.prmServerUrl;
-
       if (
-        isDebug &&
-        serverUrl &&
-        url.startsWith(serverUrl.replace(/\/+$/, ''))
+        cachedDebugMode &&
+        cachedServerUrl &&
+        url.startsWith(cachedServerUrl.replace(/\/+$/, ''))
       ) {
         let traceInfo;
         if (backgroundDebugTracker.activeTask) {
@@ -668,8 +669,10 @@ function disableBackgroundFetchHook() {
 }
 
 // Initialise based on current storage
-chrome.storage.local.get(['prmDebugMode'], (result) => {
-  if (result.prmDebugMode === true) {
+chrome.storage.local.get(['prmServerUrl', 'prmDebugMode'], (result) => {
+  cachedDebugMode = result.prmDebugMode === true;
+  cachedServerUrl = result.prmServerUrl ?? null;
+  if (cachedDebugMode) {
     enableBackgroundFetchHook();
     backgroundDebugTracker.enabled = true;
   }
@@ -692,29 +695,40 @@ chrome.storage.local.get(['prm_import_job_status'], (res) => {
 
 // Watch for toggle changes
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === 'local' && changes.prmDebugMode) {
-    if (changes.prmDebugMode.newValue === true) {
-      enableBackgroundFetchHook();
-      backgroundDebugTracker.enabled = true;
-    } else {
-      disableBackgroundFetchHook();
-      backgroundDebugTracker.enabled = false;
+  if (areaName === 'local') {
+    if (changes.prmDebugMode !== undefined) {
+      cachedDebugMode = changes.prmDebugMode.newValue === true;
+      backgroundDebugTracker.enabled = cachedDebugMode;
+      if (cachedDebugMode) {
+        enableBackgroundFetchHook();
+      } else {
+        disableBackgroundFetchHook();
+      }
+    }
+    if (changes.prmServerUrl !== undefined) {
+      cachedServerUrl = changes.prmServerUrl.newValue ?? null;
     }
   }
 });
 
 /**
- * Proxy a PRM API request from a content script.
- *
- * MV3 content scripts can't make privileged cross-origin fetches (they inherit
- * the page origin and are subject to CORS). The service worker retains the
- * extension's host-permission privileges, so it performs the request here and
- * returns a plain result object.
+ * Proxy a PRM API request from a content script with origin and endpoint whitelist.
  *
  * @param {{ path: string, method?: string, body?: any }} req
+ * @param {chrome.runtime.MessageSender} sender
  * @returns {Promise<{ ok: boolean, status?: number, data?: any, error?: string, notConnected?: boolean }>}
  */
-async function prmApiFetch({ path, method = 'GET', body }) {
+async function prmApiFetch({ path, method = 'GET', body }, sender) {
+  const senderUrl = sender?.tab?.url;
+  const isTpsOrigin = senderUrl && /^https?:\/\/(www\.)?truepeoplesearch\.com\//i.test(senderUrl);
+  if (!isTpsOrigin) {
+    return { ok: false, error: 'Unauthorized sender origin.' };
+  }
+
+  if (!path || !path.startsWith('/api/v1/tps/')) {
+    return { ok: false, error: 'Prohibited API path.' };
+  }
+
   const config = await getStoredConfig();
   if (!config.serverUrl || !config.sessionToken) {
     return { ok: false, notConnected: true, error: 'PRM not connected. Open the extension and pair.' };
@@ -733,7 +747,12 @@ async function prmApiFetch({ path, method = 'GET', body }) {
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (res.status === 401) return { ok: false, status: 401, error: 'Session expired. Reconnect PRM.' };
+    if (res.status === 401) {
+      await clearConfig();
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#EF4444' });
+      return { ok: false, status: 401, error: 'Session expired. Reconnect PRM.' };
+    }
     if (!res.ok) return { ok: false, status: res.status, error: `Server error (${res.status}).` };
     const data = await res.json().catch(() => ({}));
     return { ok: true, status: res.status, data };
@@ -743,11 +762,253 @@ async function prmApiFetch({ path, method = 'GET', body }) {
   }
 }
 
+// ── PRM-triggered extraction jobs ─────────────────────────────────────────
+//
+// PRM (or the popup) asks for a profile to be extracted; this worker opens the
+// profile in a background tab, extracts it there, posts the result to the
+// pending-imports staging table, and closes the tab. One job at a time.
+//
+// The job lives in storage rather than a variable because the worker can be
+// torn down between the tab's progress messages and its result.
+
+const EXTRACT_JOB_KEY = 'prm_extract_job';
+const EXTRACT_STATUS_KEY = 'prm_extract_status';
+const DEFAULT_MAX_RECORDS = 3000;
+
+/** True while the tab is still open. */
+async function tabExists(tabId) {
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The job in flight, if there still is one.
+ *
+ * A job whose tab has gone can never report back — the user closed it, or the
+ * worker was torn down mid-run — so it is cleared rather than left to block
+ * every later request as permanently "busy".
+ */
+async function getExtractJob() {
+  const stored = await chrome.storage.local.get([EXTRACT_JOB_KEY]);
+  const job = stored[EXTRACT_JOB_KEY] || null;
+  if (!job) return null;
+
+  if (job.tabId !== null && !(await tabExists(job.tabId))) {
+    await chrome.storage.local.remove([EXTRACT_JOB_KEY]);
+    return null;
+  }
+  return job;
+}
+
+/** Status the popup renders. `preview` is only sent once, on completion. */
+async function setExtractStatus(status, message, active = true, preview = null) {
+  await chrome.storage.local.set({
+    [EXTRACT_STATUS_KEY]: { active, status, message, preview, updatedAt: Date.now() },
+  });
+}
+
+/**
+ * Resolve once the tab has finished loading.
+ *
+ * Also resolves if the tab got there before the listener attached, and gives up
+ * waiting after `timeoutMs` — Instagram can leave a tab short of "complete"
+ * indefinitely, and the extractors report their own failures well enough that
+ * trying on a half-loaded page beats hanging forever.
+ */
+function waitForTabLoad(tabId, timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      resolve();
+    };
+
+    function onUpdated(id, info) {
+      if (id === tabId && info.status === 'complete') finish();
+    }
+
+    function onRemoved(id) {
+      if (id === tabId) finish();
+    }
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab?.status === 'complete') finish();
+    }).catch(finish);
+    setTimeout(finish, timeoutMs);
+  });
+}
+
+/** Post the finished payload to PRM, then tear the job down. */
+async function completeExtraction(job, payload) {
+  const config = await getStoredConfig();
+  const result = await sendPendingImport(config.serverUrl, config.sessionToken, payload);
+
+  await setExtractStatus(
+    result.success ? 'success' : 'error',
+    result.success
+      ? `Sent @${job.username} to PRM pending imports.`
+      : `Failed sending @${job.username} to PRM: ${result.error}`,
+    false,
+    {
+      username: payload.account_username,
+      name: payload.account_display_name,
+      bio: payload.account_bio,
+      website: payload.account_website,
+    },
+  );
+
+  await endExtraction(job);
+}
+
+/** Close the working tab and release the single-job slot. */
+async function endExtraction(job) {
+  if (job?.tabId) {
+    try {
+      await chrome.tabs.remove(job.tabId);
+    } catch {
+      // Already closed by the user; nothing to clean up.
+    }
+  }
+  await chrome.storage.local.remove([EXTRACT_JOB_KEY]);
+}
+
+/**
+ * Validate and start an extraction.
+ *
+ * `origin` is the requesting web page for external calls, and undefined when
+ * the popup asks. A web page is only trusted when it *is* the PRM server this
+ * extension is paired with — the manifest allow-list cannot express a port, so
+ * it would otherwise admit any app on localhost.
+ */
+async function startExtraction(message, origin) {
+  const config = await getStoredConfig();
+  if (!config.serverUrl || !config.sessionToken) return { ok: false, reason: 'not_paired' };
+
+  if (origin) {
+    let pairedOrigin = null;
+    try {
+      pairedOrigin = new URL(config.serverUrl).origin;
+    } catch {
+      return { ok: false, reason: 'not_paired' };
+    }
+    if (pairedOrigin !== origin) return { ok: false, reason: 'bad_origin' };
+  }
+
+  const username = String(message.username || '').trim().replace(/^@/, '');
+  if (!username) return { ok: false, reason: 'no_username' };
+
+  if (await getExtractJob()) return { ok: false, reason: 'busy' };
+
+  const job = {
+    jobId: crypto.randomUUID(),
+    action: message.action === 'graph' ? 'graph' : 'account',
+    username,
+    maxRecords: Number(message.maxRecords) || DEFAULT_MAX_RECORDS,
+    tabId: null,
+  };
+  await chrome.storage.local.set({ [EXTRACT_JOB_KEY]: job });
+
+  runExtraction(job).catch(async (err) => {
+    await setExtractStatus('error', `Extraction failed: ${err?.message || err}`, false);
+    await endExtraction(await getExtractJob());
+  });
+
+  return { ok: true, jobId: job.jobId };
+}
+
+/**
+ * Open the profile and start extracting.
+ *
+ * The account path finishes here — one DOM read and it is done. The graph path
+ * hands off to the injected walker and completes later, when its result
+ * message arrives.
+ */
+async function runExtraction(job) {
+  await setExtractStatus('info', `Opening @${job.username} on Instagram...`);
+
+  const tab = await chrome.tabs.create({
+    url: `https://www.instagram.com/${job.username}/`,
+    active: false,
+  });
+  job.tabId = tab.id;
+  await chrome.storage.local.set({ [EXTRACT_JOB_KEY]: job });
+
+  await waitForTabLoad(tab.id);
+
+  if (job.action === 'account') {
+    await setExtractStatus('info', `Reading profile for @${job.username}...`);
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: inPageAccountExtractor,
+    });
+    await completeExtraction(job, buildAccountPayload(injection?.result || {}, job.username));
+    return;
+  }
+
+  await setExtractStatus('info', `Starting follower walk for @${job.username}...`);
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ['content/graph-extractor.js'],
+  });
+  // Deliberately not awaited: the walker answers with its own messages rather
+  // than a reply, so awaiting would reject the moment the port closes and tear
+  // down the job we just started.
+  chrome.tabs.sendMessage(tab.id, {
+    type: 'PRM_RUN_GRAPH',
+    jobId: job.jobId,
+    username: job.username,
+    maxRecords: job.maxRecords,
+  }).catch(() => {});
+}
+
+// Web pages may only reach the extension if the manifest allow-lists their
+// origin; startExtraction then narrows that to the paired PRM server.
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  if (message?.type !== 'PRM_EXTRACT_START') return false;
+  startExtraction(message, sender.origin)
+    .then(sendResponse)
+    .catch((err) => sendResponse({ ok: false, reason: 'error', error: err?.message || String(err) }));
+  return true;
+});
+
 // Runtime messaging listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'START_FULL_ACCOUNT_IMPORT') {
-    runBackgroundFullAccountImport(message);
-    sendResponse({ success: true });
+  if (message.type === 'PRM_EXTRACT_START') {
+    startExtraction(message).then(sendResponse);
+    return true;
+  }
+  if (message.type === 'PRM_EXTRACT_PROGRESS') {
+    setExtractStatus('info', message.message);
+    return false;
+  }
+  if (message.type === 'PRM_EXTRACT_RESULT') {
+    getExtractJob().then((job) => {
+      if (job) completeExtraction(job, buildGraphPayload(message.data, job.username));
+    });
+    return false;
+  }
+  if (message.type === 'PRM_EXTRACT_CANCEL') {
+    // Closing the tab is the cancellation — it takes the injected walker with it.
+    getExtractJob().then(async (job) => {
+      await setExtractStatus('warning', 'Extraction cancelled.', false);
+      await endExtraction(job);
+    });
+    return false;
+  }
+  if (message.type === 'PRM_EXTRACT_ERROR') {
+    getExtractJob().then(async (job) => {
+      await setExtractStatus('error', `Extraction failed: ${message.error}`, false);
+      await endExtraction(job);
+    });
     return false;
   }
   if (message.type === 'START_POST_IMPORT') {
@@ -762,202 +1023,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === 'PRM_TPS_API') {
-    prmApiFetch(message).then(sendResponse);
+    prmApiFetch(message, sender).then(sendResponse);
     return true;
   }
   return false;
 });
-
-/**
- * Helper to convert array of user objects to raw CSV in background service worker.
- */
-function arrayToCsvSW(users) {
-  const headers = ['id', 'username', 'full_name', 'is_private', 'is_verified', 'profile_pic_url'];
-  if (!Array.isArray(users) || users.length === 0) {
-    return headers.join(',');
-  }
-  const rows = users.map((u) => [
-    `"${String(u.id || '').replace(/"/g, '""')}"`,
-    `"${String(u.username || '').replace(/"/g, '""')}"`,
-    `"${String(u.fullName || u.full_name || '').replace(/"/g, '""')}"`,
-    u.isPrivate ?? u.is_private ?? false,
-    u.isVerified ?? u.is_verified ?? false,
-    `"${String(u.profilePicUrl || u.profile_pic_url || '').replace(/"/g, '""')}"`,
-  ].join(','));
-  return [headers.join(','), ...rows].join('\r\n');
-}
-
-/**
- * Perform background full account scrape & post pending import payload to PRM server.
- */
-async function runBackgroundFullAccountImport({ username }) {
-  const cleanUsername = String(username || '').trim().replace(/^@/, '');
-  const startTime = Date.now();
-
-  async function updateStatus(status, msg, isFinished = false, errorMsg = null) {
-    const jobStatus = {
-      active: !isFinished,
-      username: cleanUsername,
-      status,
-      message: msg,
-      error: errorMsg,
-      startTime,
-      lastUpdated: Date.now()
-    };
-    await chrome.storage.local.set({ prm_full_import_job_status: jobStatus });
-  }
-
-  try {
-    const config = await getStoredConfig();
-    if (!config.serverUrl || !config.sessionToken) {
-      throw new Error('PRM is not connected. Please pair the extension first.');
-    }
-
-    await updateStatus('info', `Resolving Instagram user @${cleanUsername}...`);
-
-    const headers = {
-      'accept': '*/*',
-      'x-asbd-id': '198387',
-      'x-ig-app-id': '936619743392459',
-    };
-
-    // 1. Resolve numeric User ID
-    let userId = null;
-    let basicName = '';
-    try {
-      const res = await fetch(`https://www.instagram.com/web/search/topsearch/?context=blended&query=${encodeURIComponent(cleanUsername)}&include_reel=false`, {
-        headers, credentials: 'include'
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const match = data.users?.find(u => u.user.username.toLowerCase() === cleanUsername.toLowerCase());
-        if (match) {
-          userId = match.user.pk;
-          basicName = match.user.full_name || '';
-        }
-      }
-    } catch (_) {}
-
-    if (!userId) {
-      throw new Error(`Could not find Instagram user @${cleanUsername}. Make sure you are logged into Instagram.`);
-    }
-
-    // 2. Fetch getUserInfo(userId) for detailed metadata
-    await updateStatus('info', `Fetching profile info for @${cleanUsername}...`);
-    let userInfo = {};
-    try {
-      const infoRes = await fetch(`https://i.instagram.com/api/v1/users/${userId}/info/`, {
-        headers, credentials: 'include'
-      });
-      if (infoRes.ok) {
-        const infoData = await infoRes.json();
-        userInfo = infoData.user || {};
-      }
-    } catch (_) {}
-
-    // 3. Helper to scrape graph edges (followers / following)
-    const scrapeGraph = async (type) => {
-      const queryHash = type === 'following' ? '58712303d941c6855d4e888c5f0cd22f' : '37479f2b8209594dde7facb0d904896a';
-      const edgeKey = type === 'following' ? 'edge_follow' : 'edge_followed_by';
-      let endCursor = '', hasNextPage = true;
-      const results = [];
-
-      while (hasNextPage) {
-        const variables = { id: String(userId), include_reel: false, fetch_mutual: false, first: 50 };
-        if (endCursor) variables.after = endCursor;
-
-        const url = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
-        let resData = null;
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const res = await fetch(url, { headers, credentials: 'include' });
-          if (res.status === 429) {
-            await new Promise(r => setTimeout(r, (attempt + 1) * 5000));
-            continue;
-          }
-          if (res.ok) {
-            resData = await res.json();
-            break;
-          }
-        }
-
-        if (!resData?.data?.user) break;
-        const edge = resData.data.user[edgeKey];
-        if (!edge?.edges?.length) break;
-
-        const batch = edge.edges.map(e => ({
-          id: e.node.id,
-          username: e.node.username,
-          fullName: e.node.full_name,
-          isPrivate: e.node.is_private,
-          isVerified: e.node.is_verified,
-          profilePicUrl: e.node.profile_pic_url
-        }));
-
-        results.push(...batch);
-        endCursor = edge.page_info?.end_cursor || '';
-        hasNextPage = edge.page_info?.has_next_page && !!endCursor;
-
-        await updateStatus('info', `Scraping ${type} for @${cleanUsername} (${results.length} collected)...`);
-        await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
-      }
-      return results;
-    };
-
-    // Scrape Followers
-    await updateStatus('info', `Scraping followers for @${cleanUsername}...`);
-    const followers = await scrapeGraph('followers');
-
-    // Scrape Following
-    await updateStatus('info', `Scraping following for @${cleanUsername}...`);
-    const following = await scrapeGraph('following');
-
-    const followersCsv = arrayToCsvSW(followers);
-    const followingCsv = arrayToCsvSW(following);
-
-    const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `import_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-    const payload = {
-      uuid,
-      timestamp_added: new Date().toISOString(),
-      timestamp_imported: null,
-      already_added: false,
-      account_username: userInfo.username || cleanUsername,
-      account_display_name: userInfo.full_name || basicName || cleanUsername,
-      account_bio: userInfo.biography || '',
-      account_website: userInfo.external_url || '',
-      account_email: userInfo.public_email || '',
-      account_phone: userInfo.contact_phone_number || '',
-      account_location_area: userInfo.category || '',
-      account_followers: followersCsv,
-      account_following: followingCsv
-    };
-
-    await updateStatus('info', `Sending pending import payload to PRM server...`);
-
-    const postUrl = `${config.serverUrl.replace(/\/+$/, '')}/api/v1/pending-imports`;
-    const postRes = await fetch(postUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Extension-Token': config.sessionToken
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!postRes.ok) {
-      const errText = await postRes.text().catch(() => '');
-      throw new Error(`Server returned HTTP ${postRes.status}: ${errText}`);
-    }
-
-    await updateStatus('success', `Import complete! Sent ${followers.length} followers and ${following.length} following to PRM pending imports.`, true);
-
-  } catch (err) {
-    console.error('[PRM] Background full account import error:', err);
-    await updateStatus('error', `Import failed: ${err.message || 'unknown error'}`, true, err.message);
-  }
-}
 
 

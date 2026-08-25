@@ -16,7 +16,8 @@ const SUPPORTED_DOMAINS = [
  * @type {string[]}
  */
 const NON_PROFILE_PATHS = [
-  'p', 'reel', 'stories', 'explore', 'accounts',
+  'p', 'reel', 'reels', 'stories', 'explore', 'direct', 'accounts',
+  'about', 'legal', 'privacy', 'terms', 'emails', 'tv', 'developer', 'graphql',
   'groups', 'pages', 'events', 'watch', 'marketplace',
 ];
 
@@ -98,4 +99,12 @@ function supportedPlatforms() {
   return SUPPORTED_DOMAINS.map((d) => d.name);
 }
 
-export { matchUrl, extractUsername, supportedPlatforms, SUPPORTED_DOMAINS };
+function extractInstagramUsername(url) {
+  const match = (url || '').match(/^https?:\/\/(www\.)?instagram\.com\/([a-zA-Z0-9_.]+)\/?(?:[?#].*)?$/);
+  if (match && !['p', 'explore', 'reels', 'stories', 'direct', 'accounts', 'about', 'tv', 'reel'].includes(match[2])) {
+    return match[2];
+  }
+  return null;
+}
+
+export { matchUrl, extractUsername, supportedPlatforms, SUPPORTED_DOMAINS, extractInstagramUsername };

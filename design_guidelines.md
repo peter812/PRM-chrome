@@ -1,26 +1,50 @@
-# Design Guidelines: People Management CRM Application
+# Design Guidelines: PRM (Personal Relationship Manager) Extension
 
-## Design Approach
+## Design System Identity & Philosophy
 
-**Selected Approach:** Design System - Modern Productivity Tools
-**Primary References:** Linear, Notion, Asana
-**Design Philosophy:** Clean, efficient, data-focused interface prioritizing quick access to information and streamlined workflows. Professional aesthetic with emphasis on readability and scanability.
+**Design Language:** PRM Modern Token System (Tailwind CSS / Radix UI tokens)
+**Primary Aesthetics:** High-contrast, token-driven aesthetic with deep slate/charcoal foundations and electric cobalt blue (`hsl(217 91% 60%)`) accent.
+**Elevation & Overlays:** Pseudo-element hover and active elevation layers (`--elevate-1`, `--elevate-2`).
+**Popup Constraints:** Compact spatial layout with constrained dimensions ($380\text{px} \times 480\text{--}600\text{px}$) and custom 6px thin scrollbars.
 
 ---
 
-## Typography System
+## Typography System (CSP & Manifest V3 Compliant)
 
 **Font Families:**
-- Primary: Inter (via Google Fonts CDN)
-- Monospace: JetBrains Mono (for API keys, technical data)
+- Primary Sans: `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
+- Monospace: `'JetBrains Mono', 'Fira Code', ui-monospace, monospace`
+
+*(Note: Zero-overhead system font stack compliant with Chrome Manifest V3 CSP; no external Google Fonts CDN requests).*
 
 **Type Scale:**
-- Page Titles: text-3xl font-semibold (30px)
-- Section Headers: text-xl font-semibold (20px)
-- Card Titles/Person Names: text-lg font-medium (18px)
-- Body Text: text-base (16px)
-- Meta Information: text-sm (14px)
-- Timestamps/Labels: text-xs font-medium uppercase tracking-wide (12px)
+- Header / Brand: text-sm font-semibold (13px)
+- Section Titles: text-xs font-semibold uppercase tracking-wide (11px)
+- Card Titles / Field Labels: text-xs font-medium (12px)
+- Body / Form Inputs: text-xs (12px / 13px)
+- Meta Information / Logs: text-xs / text-[11px] font-mono (11px)
+
+---
+
+## Design Tokens & HSL Variables
+
+### Dark Mode (Primary Palette)
+- `--background: 240 6% 8%`
+- `--foreground: 240 5% 96%`
+- `--border: 240 6% 18%`
+- `--input: 240 6% 32%`
+- `--ring: 217 91% 60%`
+- `--card: 240 5% 11%`
+- `--card-border: 240 6% 16%`
+- `--primary: 217 91% 60%` (Electric Cobalt)
+- `--primary-foreground: 0 0% 100%`
+- `--primary-border: hsl(217 91% 69%)`
+- `--secondary: 240 5% 20%`
+- `--muted: 240 6% 18%`
+- `--muted-foreground: 240 4% 65%`
+- `--destructive: 0 84% 60%`
+- `--elevate-1: rgba(255, 255, 255, 0.04)`
+- `--elevate-2: rgba(255, 255, 255, 0.09)`
 
 ---
 

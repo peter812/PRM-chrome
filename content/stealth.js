@@ -1,150 +1,81 @@
 /**
  * Stealth / anti-detection helpers for the content script.
  *
- * Implements patches inspired by puppeteer-extra-plugin-stealth to make
- * the extension-injected page context look like a normal browser session.
+ * Implements safe, native-looking patches to prevent headless bot detection
+ * without breaking DOM deterministic layout or injecting detectable synthetic properties.
  *
- * These patches run in the MAIN world (page context) to override
- * properties that bot-detection scripts typically check.
+ * Runs in the MAIN world (page context).
  */
 
 /* eslint-disable no-empty */
 
-/**
- * Apply all stealth patches. Call once per page load.
- */
-function applyStealthPatches() {
-  patchNavigatorWebdriver();
-  patchNavigatorPlugins();
-  patchNavigatorLanguages();
-  patchChromeRuntime();
-  patchPermissions();
-  patchCodecs();
-  addTimingJitter();
-}
+(() => {
+  if (window.__prmStealthReady) return;
+  window.__prmStealthReady = true;
 
-// ── Individual patches ───────────────────────────────────
+  function makeNativeString(fn, name) {
+    Object.defineProperty(fn, 'name', { value: name, configurable: true });
+    const fnToString = () => `function ${name}() { [native code] }`;
+    Object.defineProperty(fn, 'toString', { value: fnToString, configurable: true });
+    return fn;
+  }
 
-/**
- * Remove the `navigator.webdriver` flag that headless / automated browsers set.
- */
-function patchNavigatorWebdriver() {
-  try {
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => false,
-      configurable: true,
-    });
-  } catch {}
-}
-
-/**
- * Spoof a non-empty `navigator.plugins` array (headless Chrome has length 0).
- */
-function patchNavigatorPlugins() {
-  try {
-    const fakePlugins = {
-      length: 3,
-      item: (index) => fakePlugins[index] || null,
-      namedItem: (name) => {
-        for (let i = 0; i < fakePlugins.length; i++) {
-          if (fakePlugins[i] && fakePlugins[i].name === name) return fakePlugins[i];
-        }
-        return null;
-      },
-      refresh: () => {},
-      0: { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
-      1: { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
-      2: { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 },
-    };
-
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => fakePlugins,
-      configurable: true,
-    });
-  } catch {}
-}
-
-/**
- * Ensure `navigator.languages` returns a plausible value.
- */
-function patchNavigatorLanguages() {
-  try {
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en'],
-      configurable: true,
-    });
-  } catch {}
-}
-
-/**
- * Ensure `window.chrome.runtime` exists (it is absent in headless mode).
- */
-function patchChromeRuntime() {
-  try {
-    if (!window.chrome) window.chrome = {};
-    if (!window.chrome.runtime) {
-      window.chrome.runtime = {
-        connect: () => {},
-        sendMessage: () => {},
-      };
-    }
-  } catch {}
-}
-
-/**
- * Override Permissions.query to hide the "notifications denied" signal that
- * bot detectors use.
- */
-function patchPermissions() {
-  try {
-    const originalQuery = window.Permissions.prototype.query;
-    window.Permissions.prototype.query = function (params) {
-      if (params && params.name === 'notifications') {
-        return Promise.resolve({ state: 'prompt', onchange: null });
+  /**
+   * Ensure `navigator.webdriver` is false / undefined without revealing overrides.
+   */
+  function patchNavigatorWebdriver() {
+    try {
+      const proto = Object.getPrototypeOf(navigator);
+      if (proto && 'webdriver' in proto) {
+        delete proto.webdriver;
       }
-      return originalQuery.call(this, params);
-    };
-  } catch {}
-}
+      Object.defineProperty(navigator, 'webdriver', {
+        get: makeNativeString(() => undefined, 'get webdriver'),
+        configurable: true,
+      });
+    } catch {}
+  }
 
-/**
- * Ensure common media codec support is reported (some detection scripts
- * check for codec availability).
- */
-function patchCodecs() {
-  try {
-    const el = document.createElement('video');
-    if (el.canPlayType) {
-      const original = el.canPlayType.bind(el);
-      HTMLVideoElement.prototype.canPlayType = function (type) {
-        if (type === 'video/mp4; codecs="avc1.42E01E"') return 'probably';
-        if (type === 'video/webm; codecs="vp8, vorbis"') return 'probably';
-        return original(type);
+  /**
+   * Ensure `navigator.languages` returns standard values.
+   */
+  function patchNavigatorLanguages() {
+    try {
+      const defaultLangs = navigator.languages && navigator.languages.length > 0
+        ? navigator.languages
+        : ['en-US', 'en'];
+      Object.defineProperty(navigator, 'languages', {
+        get: makeNativeString(() => defaultLangs, 'get languages'),
+        configurable: true,
+      });
+    } catch {}
+  }
+
+  /**
+   * Override Permissions.query to return prompt state for notifications.
+   */
+  function patchPermissions() {
+    try {
+      if (!window.Permissions?.prototype?.query) return;
+      const originalQuery = window.Permissions.prototype.query;
+      const patchedQuery = function query(params) {
+        if (params && params.name === 'notifications') {
+          return Promise.resolve({ state: 'prompt', onchange: null });
+        }
+        return originalQuery.call(this, params);
       };
-    }
-  } catch {}
-}
+      window.Permissions.prototype.query = makeNativeString(patchedQuery, 'query');
+    } catch {}
+  }
 
-/**
- * Introduce a small random timing jitter to DOM reads so automated
- * high-frequency polling can be distinguished less easily.
- */
-function addTimingJitter() {
-  try {
-    const origGetBCR = Element.prototype.getBoundingClientRect;
-    Element.prototype.getBoundingClientRect = function () {
-      const rect = origGetBCR.call(this);
-      // Jitter by ±0.001px — imperceptible but breaks fingerprinting
-      const jitter = () => (Math.random() - 0.5) * 0.002;
-      return new DOMRect(
-        rect.x + jitter(),
-        rect.y + jitter(),
-        rect.width + jitter(),
-        rect.height + jitter(),
-      );
-    };
-  } catch {}
-}
+  /**
+   * Apply all stealth patches.
+   */
+  function applyStealthPatches() {
+    patchNavigatorWebdriver();
+    patchNavigatorLanguages();
+    patchPermissions();
+  }
 
-// Auto-apply when injected
-applyStealthPatches();
+  applyStealthPatches();
+})();

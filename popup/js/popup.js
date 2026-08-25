@@ -6,7 +6,7 @@
  */
 
 import { getStoredConfig, saveConfig, clearConfig, set, get, STORAGE_KEYS } from '../../utils/storage.js';
-import { pingServer, verifyCode, bulkImportScrapedContacts } from '../../utils/api-client.js';
+import { pingServer, verifyCode } from '../../utils/api-client.js';
 import { debugTracker } from '../../utils/debug-tracker.js';
 
 // ── DOM references ──────────────────────────────────────
@@ -15,9 +15,31 @@ const viewServerUrl = () => document.getElementById('view-server-url');
 const viewCodeEntry = () => document.getElementById('view-code-entry');
 const viewConnected = () => document.getElementById('view-connected');
 
-// ── View switching ──────────────────────────────────────
+// ── View switching & Footer state ──────────────────────
 
-function showView(viewId) {
+function updateConnectionFooter(isConnected, serverUrl = null) {
+  const hostEl = document.getElementById('footer-connection-host');
+  const dotEl = document.getElementById('footer-status-dot');
+  const labelEl = document.getElementById('footer-status-label');
+  if (!hostEl || !dotEl || !labelEl) return;
+
+  if (isConnected && serverUrl) {
+    try {
+      const url = new URL(serverUrl);
+      hostEl.textContent = `PRM (${url.hostname})`;
+    } catch {
+      hostEl.textContent = 'PRM Connected';
+    }
+    dotEl.className = 'status-dot online';
+    labelEl.textContent = 'Active';
+  } else {
+    hostEl.textContent = 'PRM Companion';
+    dotEl.className = 'status-dot';
+    labelEl.textContent = 'Offline';
+  }
+}
+
+async function showView(viewId) {
   document.querySelectorAll('.view').forEach((v) => {
     v.style.display = 'none';
   });
@@ -25,16 +47,25 @@ function showView(viewId) {
   if (target) {
     target.style.display = 'block';
   }
+  const config = await getStoredConfig();
+  const isConnected = viewId === 'view-connected' && Boolean(config.serverUrl && config.sessionToken);
+  updateConnectionFooter(isConnected, config.serverUrl);
 }
 
 // ── Status helpers ──────────────────────────────────────
 
-function showStatus(elementId, type, message) {
+let statusTimeout = null;
+function showStatus(elementId, type, message, autoDismissMs = 0) {
   const el = document.getElementById(elementId);
   if (!el) return;
-  el.className = `status-message ${type}`;
+  el.className = `status-message status-${type}`;
   el.textContent = message;
   el.style.display = 'block';
+
+  if (statusTimeout) clearTimeout(statusTimeout);
+  if (autoDismissMs > 0) {
+    statusTimeout = setTimeout(() => clearStatus(elementId), autoDismissMs);
+  }
 }
 
 function clearStatus(elementId) {
@@ -68,7 +99,7 @@ function initServerUrlView() {
     }
     clearStatus('server-url-status');
 
-    let rawUrl = input.value.trim();
+    const rawUrl = input.value.trim();
     if (!rawUrl) {
       showStatus('server-url-status', 'error', 'Please enter your PRM server URL.');
       input.focus();
@@ -76,14 +107,30 @@ function initServerUrlView() {
     }
 
     // Auto-normalize (e.g. localhost:3000 -> http://localhost:3000)
-    let finalUrl = rawUrl.replace(/\/+$/, '');
-    if (!/^https?:\/\//i.test(finalUrl)) {
-      if (/^(localhost|127\.0\.0\.1|192\.168\.|10\.|0\.0\.0\.0)/i.test(finalUrl)) {
-        finalUrl = `http://${finalUrl}`;
-      } else {
-        finalUrl = `https://${finalUrl}`;
-      }
+    let normalized = rawUrl.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(normalized)) {
+      const isLocal = /^(localhost|127\.0\.0\.1|192\.168\.|10\.|0\.0\.0\.0)(:\d+)?/i.test(normalized);
+      normalized = `${isLocal ? 'http' : 'https'}://${normalized}`;
     }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(normalized);
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        throw new Error('Only HTTP and HTTPS protocols are supported.');
+      }
+    } catch {
+      showStatus('server-url-status', 'error', 'Invalid server URL format. Example: https://prm.example.com');
+      input.focus();
+      return false;
+    }
+
+    const isLoopback = parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1';
+    if (parsedUrl.protocol === 'http:' && !isLoopback) {
+      parsedUrl.protocol = 'https:';
+    }
+
+    const finalUrl = parsedUrl.origin + (parsedUrl.pathname === '/' ? '' : parsedUrl.pathname);
 
     btn.disabled = true;
     btn.textContent = 'Connecting…';
@@ -222,10 +269,17 @@ function initCodeEntryView() {
     });
 
     digit.addEventListener('keydown', (e) => {
-      if (e.key === 'Backspace' && !digit.value && i > 0) {
+      if (e.key === 'Backspace') {
+        if (!digit.value && i > 0) {
+          digits[i - 1].focus();
+          digits[i - 1].value = '';
+          e.preventDefault();
+        }
+      } else if (e.key === 'ArrowLeft' && i > 0) {
         digits[i - 1].focus();
-      }
-      if (e.key === 'Enter') {
+      } else if (e.key === 'ArrowRight' && i < digits.length - 1) {
+        digits[i + 1].focus();
+      } else if (e.key === 'Enter') {
         e.preventDefault();
         handleVerify();
       }
@@ -239,10 +293,13 @@ function initCodeEntryView() {
         .replace(/[^0-9]/g, '')
         .slice(0, 4);
 
-      for (let j = 0; j < pasted.length && i + j < digits.length; j++) {
-        digits[i + j].value = pasted[j];
+      if (!pasted) return;
+
+      const startIdx = pasted.length === 4 ? 0 : i;
+      for (let j = 0; j < pasted.length && startIdx + j < digits.length; j++) {
+        digits[startIdx + j].value = pasted[j];
       }
-      const nextIndex = Math.min(i + pasted.length, digits.length - 1);
+      const nextIndex = Math.min(startIdx + pasted.length, digits.length - 1);
       digits[nextIndex].focus();
       updateVerifyBtn();
 
@@ -338,31 +395,49 @@ function initTabs() {
   });
 }
 
-// ── Dark Mode Toggle ────────────────────────────────────
+// ── Theme / Dark Mode Engine ─────────────────────────────
 
 async function initDarkMode() {
   const toggle = document.getElementById('dark-mode-toggle');
-  if (!toggle) return;
+  const quickToggle = document.getElementById('theme-quick-toggle');
 
-  // Load stored preference
+  const applyTheme = (isDark) => {
+    document.documentElement.classList.toggle('dark', isDark);
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    try {
+      localStorage.setItem('prm_theme_cached', isDark ? 'dark' : 'light');
+    } catch (_) {}
+    if (toggle) toggle.checked = isDark;
+    if (quickToggle) {
+      quickToggle.innerHTML = isDark
+        ? `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>`;
+      quickToggle.title = isDark ? 'Switch to Light appearance' : 'Switch to Dark appearance';
+    }
+  };
+
+  // Load stored preference; default to dark mode
   const storedTheme = await get(STORAGE_KEYS.DARK_MODE);
-  if (storedTheme === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    toggle.checked = true;
-  } else if (storedTheme === 'light') {
-    document.documentElement.setAttribute('data-theme', 'light');
-    toggle.checked = false;
-  } else {
-    // No preference stored — follow system; check if system prefers dark
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    toggle.checked = prefersDark;
+  const isDark = storedTheme === null ? true : storedTheme === 'dark';
+  applyTheme(isDark);
+
+  const toggleTheme = async (newDark) => {
+    applyTheme(newDark);
+    await set(STORAGE_KEYS.DARK_MODE, newDark ? 'dark' : 'light');
+  };
+
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      toggleTheme(toggle.checked);
+    });
   }
 
-  toggle.addEventListener('change', async () => {
-    const theme = toggle.checked ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', theme);
-    await set(STORAGE_KEYS.DARK_MODE, theme);
-  });
+  if (quickToggle) {
+    quickToggle.addEventListener('click', () => {
+      const currentlyDark = document.documentElement.classList.contains('dark');
+      toggleTheme(!currentlyDark);
+    });
+  }
 }
 
 // ── Debug Mode Toggle & Timing Tracing ──────────────────
@@ -386,21 +461,36 @@ async function initDebugMode() {
  * @param {string} text
  * @param {string} [mimeType]
  */
-function downloadTxtFile(filename, text, mimeType = 'text/plain;charset=utf-8') {
+async function downloadTxtFile(filename, text, mimeType = 'text/plain;charset=utf-8') {
   const blob = new Blob([text], { type: mimeType });
-  const url = URL.createObjectURL(blob);
+  const blobUrl = URL.createObjectURL(blob);
+
+  if (chrome.downloads && chrome.downloads.download) {
+    try {
+      await chrome.downloads.download({
+        url: blobUrl,
+        filename,
+        saveAs: false,
+      });
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      return;
+    } catch {
+      // Fall through to anchor tag click
+    }
+  }
+
   const a = document.createElement('a');
-  a.href = url;
+  a.href = blobUrl;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
 }
 
 // ── Instagram URL matching (mirrors url-matcher.js) ─────
 
-const NON_PROFILE_PATHS = ['p', 'reel', 'stories', 'explore', 'accounts', 'direct', 'reels'];
+const NON_PROFILE_PATHS = ['p', 'reel', 'stories', 'explore', 'accounts', 'direct', 'reels', 'about', 'legal', 'privacy', 'terms', 'tv'];
 
 /**
  * Check if a URL is an Instagram profile page.
@@ -458,10 +548,6 @@ async function detectCurrentPage() {
   const scrapeBtn = document.getElementById('scrape-btn');
   const importPostsBtn = document.getElementById('import-posts-btn');
   const importLatestPostBtn = document.getElementById('import-latest-post-btn');
-  const extractFollowersBtn = document.getElementById('extract-followers-btn');
-  const extractFollowingBtn = document.getElementById('extract-following-btn');
-
-  const grabAccountImportBtn = document.getElementById('grab-account-import-btn');
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -476,18 +562,6 @@ async function detectCurrentPage() {
         importLatestPostBtn.style.display = 'none';
         importLatestPostBtn.disabled = true;
       }
-      if (extractFollowersBtn) {
-        extractFollowersBtn.style.display = 'none';
-        extractFollowersBtn.disabled = true;
-      }
-      if (extractFollowingBtn) {
-        extractFollowingBtn.style.display = 'none';
-        extractFollowingBtn.disabled = true;
-      }
-      if (grabAccountImportBtn) {
-        grabAccountImportBtn.style.display = 'none';
-        grabAccountImportBtn.disabled = true;
-      }
       platformBadge.style.display = 'none';
       return;
     }
@@ -498,40 +572,17 @@ async function detectCurrentPage() {
 
     if (isProfile && username) {
       platformBadge.style.display = '';
-      platformName.textContent = `Instagram · @${escapeHtml(username)}`;
+      platformName.textContent = `Instagram · @${username}`;
       if (importPostsBtn) importPostsBtn.style.display = '';
       if (importLatestPostBtn) importLatestPostBtn.style.display = '';
-      if (extractFollowersBtn) {
-        extractFollowersBtn.style.display = '';
-        extractFollowersBtn.disabled = false;
-      }
-      if (extractFollowingBtn) {
-        extractFollowingBtn.style.display = '';
-        extractFollowingBtn.disabled = false;
-      }
-      if (grabAccountImportBtn) {
-        grabAccountImportBtn.style.display = '';
-        grabAccountImportBtn.disabled = false;
-      }
-      const audienceInput = document.getElementById('audience-target-input');
-      if (audienceInput && !audienceInput.value) {
-        audienceInput.value = username;
-      }
     } else {
       platformBadge.style.display = 'none';
       if (importPostsBtn) importPostsBtn.style.display = 'none';
       if (importLatestPostBtn) importLatestPostBtn.style.display = 'none';
-      if (extractFollowersBtn) extractFollowersBtn.style.display = 'none';
-      if (extractFollowingBtn) extractFollowingBtn.style.display = 'none';
-      if (grabAccountImportBtn) grabAccountImportBtn.style.display = 'none';
     }
 
-    chrome.storage.local.get(['prm_import_job_status', 'prm_full_import_job_status'], (res) => {
-      if (res.prm_full_import_job_status && res.prm_full_import_job_status.active) {
-        updateUIWithFullImportStatus(res.prm_full_import_job_status);
-      } else {
-        updateUIWithJobStatus(res.prm_import_job_status);
-      }
+    chrome.storage.local.get(['prm_import_job_status'], (res) => {
+      updateUIWithJobStatus(res.prm_import_job_status);
     });
 
   } catch {
@@ -545,35 +596,7 @@ async function detectCurrentPage() {
       importLatestPostBtn.style.display = 'none';
       importLatestPostBtn.disabled = true;
     }
-    if (extractFollowersBtn) {
-      extractFollowersBtn.style.display = 'none';
-      extractFollowersBtn.disabled = true;
-    }
-    if (extractFollowingBtn) {
-      extractFollowingBtn.style.display = 'none';
-      extractFollowingBtn.disabled = true;
-    }
-    if (grabAccountImportBtn) {
-      grabAccountImportBtn.style.display = 'none';
-      grabAccountImportBtn.disabled = true;
-    }
     platformBadge.style.display = 'none';
-  }
-}
-
-function updateUIWithFullImportStatus(jobStatus) {
-  const grabAccountImportBtn = document.getElementById('grab-account-import-btn');
-  if (!grabAccountImportBtn) return;
-
-  if (jobStatus && jobStatus.active) {
-    grabAccountImportBtn.disabled = true;
-    grabAccountImportBtn.textContent = `Importing @${jobStatus.username}…`;
-    showStatus('scrape-status', jobStatus.status || 'info', jobStatus.message);
-  } else {
-    restoreButtonHtml(grabAccountImportBtn, 'Grab Followers & Following to PRM');
-    if (jobStatus && jobStatus.message) {
-      showStatus('scrape-status', jobStatus.status || 'info', jobStatus.message);
-    }
   }
 }
 
@@ -581,9 +604,6 @@ function updateUIWithJobStatus(jobStatus) {
   const scrapeBtn = document.getElementById('scrape-btn');
   const importPostsBtn = document.getElementById('import-posts-btn');
   const importLatestPostBtn = document.getElementById('import-latest-post-btn');
-  const extractFollowersBtn = document.getElementById('extract-followers-btn');
-  const extractFollowingBtn = document.getElementById('extract-following-btn');
-  const grabAccountImportBtn = document.getElementById('grab-account-import-btn');
   if (!scrapeBtn) return;
 
   if (jobStatus && jobStatus.active) {
@@ -608,9 +628,6 @@ function updateUIWithJobStatus(jobStatus) {
         restoreButtonHtml(importLatestPostBtn, 'Add Most Recent Post to PRM');
       }
     }
-    if (extractFollowersBtn) extractFollowersBtn.disabled = true;
-    if (extractFollowingBtn) extractFollowingBtn.disabled = true;
-    if (grabAccountImportBtn) grabAccountImportBtn.disabled = true;
     showStatus('scrape-status', jobStatus.status, jobStatus.message);
   } else {
     if (importPostsBtn) {
@@ -619,10 +636,6 @@ function updateUIWithJobStatus(jobStatus) {
     if (importLatestPostBtn) {
       restoreButtonHtml(importLatestPostBtn, 'Add Most Recent Post to PRM');
     }
-    if (grabAccountImportBtn) {
-      restoreButtonHtml(grabAccountImportBtn, 'Grab Followers & Following to PRM');
-    }
-
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs && tabs.length > 0 ? tabs[0] : null;
@@ -635,12 +648,6 @@ function updateUIWithJobStatus(jobStatus) {
       if (importLatestPostBtn) {
         importLatestPostBtn.disabled = !isProfile;
       }
-      if (extractFollowersBtn) {
-        extractFollowersBtn.disabled = !isProfile;
-      }
-      if (extractFollowingBtn) {
-        extractFollowingBtn.disabled = !isProfile;
-      }
 
       if (jobStatus && isProfile && username && username === jobStatus.username) {
         showStatus('scrape-status', jobStatus.status, jobStatus.message);
@@ -652,7 +659,16 @@ function updateUIWithJobStatus(jobStatus) {
 }
 
 function restoreButtonHtml(btn, label) {
-  if (btn.querySelector('svg')) return;
+  const existingSvg = btn.querySelector('svg');
+  if (existingSvg) {
+    const textNode = Array.from(btn.childNodes).find((n) => n.nodeType === Node.TEXT_NODE);
+    if (textNode) {
+      textNode.textContent = ` ${label}`;
+    } else {
+      btn.appendChild(document.createTextNode(` ${label}`));
+    }
+    return;
+  }
   btn.innerHTML = `
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
       <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -867,452 +883,172 @@ function initScraperTab() {
       }
     });
   }
-
-  const extractFollowersBtn = document.getElementById('extract-followers-btn');
-  const extractFollowingBtn = document.getElementById('extract-following-btn');
-
-  if (extractFollowersBtn) {
-    extractFollowersBtn.addEventListener('click', async () => {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const { username } = checkInstagramProfile(tab?.url || '');
-      if (username) {
-        const input = document.getElementById('audience-target-input');
-        if (input) input.value = username;
-        const select = document.getElementById('audience-type-select');
-        if (select) select.value = 'followers';
-        activateTab('tab-audience');
-      }
-    });
-  }
-
-  if (extractFollowingBtn) {
-    extractFollowingBtn.addEventListener('click', async () => {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const { username } = checkInstagramProfile(tab?.url || '');
-      if (username) {
-        const input = document.getElementById('audience-target-input');
-        if (input) input.value = username;
-        const select = document.getElementById('audience-type-select');
-        if (select) select.value = 'following';
-        activateTab('tab-audience');
-      }
-    });
-  }
-
-  const grabAccountImportBtn = document.getElementById('grab-account-import-btn');
-  if (grabAccountImportBtn) {
-    grabAccountImportBtn.addEventListener('click', async () => {
-      clearStatus('scrape-status');
-      
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || !tab.id) {
-        showStatus('scrape-status', 'error', 'No active tab found.');
-        return;
-      }
-
-      const { isProfile, username } = checkInstagramProfile(tab.url);
-      if (!isProfile || !username) {
-        showStatus('scrape-status', 'error', 'Invalid Instagram profile page. Please navigate to an Instagram profile.');
-        return;
-      }
-
-      grabAccountImportBtn.disabled = true;
-      grabAccountImportBtn.textContent = 'Connecting…';
-
-      try {
-        chrome.runtime.sendMessage({
-          type: 'START_FULL_ACCOUNT_IMPORT',
-          username: username
-        }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.error('[PRM] Failed to start full account import:', chrome.runtime.lastError.message);
-            showStatus('scrape-status', 'error', `Failed to start import: ${chrome.runtime.lastError.message}`);
-          } else {
-            console.log('[PRM] Full account import started:', response);
-            showStatus('scrape-status', 'info', `Started full account import for @${username}...`);
-          }
-        });
-      } catch (err) {
-        console.error('[PRM] sendMessage exception:', err);
-        showStatus('scrape-status', 'error', `Failed to start import: ${err.message}`);
-      }
-    });
-  }
 }
 
 
 let refreshAudienceUI = () => {};
 
-// ── Audience / Follower Scraper Tab Logic ────────────────
+// ── Audience / Account Extraction Tab Logic ────────────────
 
 function initAudienceTab() {
-  const targetInput = document.getElementById('audience-target-input');
-  const typeSelect = document.getElementById('audience-type-select');
-  const limitInput = document.getElementById('audience-limit-input');
-  const delayInput = document.getElementById('audience-delay-input');
+  const usernameDisplay = document.getElementById('audience-username-text');
+  const extractionType = document.getElementById('audience-extraction-type');
   const startBtn = document.getElementById('audience-start-btn');
   const cancelBtn = document.getElementById('audience-cancel-btn');
-  const progressCard = document.getElementById('audience-progress-card');
-  const progressTarget = document.getElementById('audience-progress-target');
-  const progressCount = document.getElementById('audience-progress-count');
-  const progressFill = document.getElementById('audience-progress-fill');
+  const statusCard = document.getElementById('audience-status-card');
   const statusMsg = document.getElementById('audience-status-msg');
-  const actionsDiv = document.getElementById('audience-actions');
-  const importPrmBtn = document.getElementById('audience-import-prm-btn');
-  const exportCsvBtn = document.getElementById('audience-export-csv-btn');
-  const exportJsonBtn = document.getElementById('audience-export-json-btn');
+  const previewFields = document.getElementById('audience-preview-fields');
+  const previewUsername = document.getElementById('audience-preview-username');
+  const previewName = document.getElementById('audience-preview-name');
+  const previewBio = document.getElementById('audience-preview-bio');
+  const previewWebsite = document.getElementById('audience-preview-website');
+  const logConsole = document.getElementById('audience-log-console');
+  const clearLogsBtn = document.getElementById('audience-clear-logs-btn');
 
   if (!startBtn) return;
 
-  // Open in Tab link — opens this popup as a full browser tab
-  const openTabLink = document.getElementById('audience-open-tab');
-  if (openTabLink) {
-    // Hide the link if we're already running in a tab (not a popup)
-    const isPopup = window.innerWidth < 500;
-    if (!isPopup) {
-      openTabLink.style.display = 'none';
-    } else {
-      openTabLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        chrome.tabs.create({ url: chrome.runtime.getURL('popup/index.html') });
-        window.close();
-      });
+  const MAX_LOG_LINES = 200;
+  function addLog(text) {
+    if (!logConsole) return;
+    const time = new Date().toLocaleTimeString();
+    const newLine = `[${time}] ${text}\n`;
+    let current = logConsole.textContent + newLine;
+    const lines = current.split('\n');
+    if (lines.length > MAX_LOG_LINES) {
+      current = lines.slice(lines.length - MAX_LOG_LINES).join('\n');
     }
+    logConsole.textContent = current;
+    logConsole.scrollTop = logConsole.scrollHeight;
   }
 
-  function renderTaskState(task, contacts = []) {
-    if (!task) {
-      if (progressCard) progressCard.style.display = 'none';
-      if (startBtn) startBtn.disabled = false;
-      if (cancelBtn) cancelBtn.style.display = 'none';
-      if (targetInput) targetInput.disabled = false;
-      if (typeSelect) typeSelect.disabled = false;
-      if (limitInput) limitInput.disabled = false;
-      if (delayInput) delayInput.disabled = false;
-      if (actionsDiv) actionsDiv.style.display = 'none';
-      return;
-    }
-
-    if (progressCard) progressCard.style.display = '';
-    if (progressTarget) progressTarget.textContent = `@${task.username || 'unknown'} (${task.type || 'followers'})`;
-
-    const countText = task.maxLimit && Number(task.maxLimit) > 0 && task.maxLimit !== Infinity
-      ? `${task.totalExtracted || 0} / ${task.maxLimit} extracted`
-      : `${task.totalExtracted || 0} extracted`;
-    if (progressCount) progressCount.textContent = countText;
-
-    if (progressFill) {
-      if (task.maxLimit && Number(task.maxLimit) > 0 && task.maxLimit !== Infinity) {
-        const pct = Math.min(100, Math.round(((task.totalExtracted || 0) / task.maxLimit) * 100));
-        progressFill.style.width = `${pct}%`;
-      } else {
-        progressFill.style.width = '100%';
-      }
-    }
-
-    if (statusMsg) {
-      let statusType = 'info';
-      if (task.status === 'error') statusType = 'error';
-      else if (task.status === 'success') statusType = 'success';
-      else if (task.status === 'warning' || task.status === 'stopped') statusType = 'warning';
-      else statusType = 'info';
-
-      statusMsg.className = `status-message ${statusType}`;
-      statusMsg.textContent = task.message || '';
-      statusMsg.style.display = task.message ? 'block' : 'none';
-    }
-
-    if (task.active) {
-      startBtn.disabled = true;
-      if (cancelBtn) {
-        cancelBtn.style.display = '';
-        cancelBtn.disabled = false;
-      }
-      if (targetInput) {
-        if (!targetInput.value && task.username) targetInput.value = task.username;
-        targetInput.disabled = true;
-      }
-      if (typeSelect) {
-        if (task.type) typeSelect.value = task.type;
-        typeSelect.disabled = true;
-      }
-      if (limitInput) limitInput.disabled = true;
-      if (delayInput) delayInput.disabled = true;
-      if (actionsDiv) actionsDiv.style.display = 'none';
-    } else {
-      startBtn.disabled = false;
-      if (cancelBtn) cancelBtn.style.display = 'none';
-      if (targetInput) targetInput.disabled = false;
-      if (typeSelect) typeSelect.disabled = false;
-      if (limitInput) limitInput.disabled = false;
-      if (delayInput) delayInput.disabled = false;
-      if (contacts && contacts.length > 0) {
-        if (actionsDiv) actionsDiv.style.display = 'flex';
-      } else {
-        if (actionsDiv) actionsDiv.style.display = 'none';
-      }
-    }
-  }
-
-  refreshAudienceUI = () => {
-    chrome.storage.local.get(['prm_ig_scrape_task', 'prm_ig_scraped_contacts'], (res) => {
-      let task = res.prm_ig_scrape_task;
-      const contacts = res.prm_ig_scraped_contacts || [];
-      if (task && task.active) {
-        const lastUpd = task.lastUpdated || task.startTime || 0;
-        // If task hasn't updated in 12s, the popup context died when closed
-        if (Date.now() - lastUpd > 12000) {
-          task = {
-            ...task,
-            active: false,
-            status: 'warning',
-            message: `Extraction paused when popup closed (${contacts.length} collected).`,
-            finishedAt: Date.now()
-          };
-          chrome.storage.local.set({ prm_ig_scrape_task: task });
-        }
-      }
-      renderTaskState(task, contacts);
+  if (clearLogsBtn) {
+    clearLogsBtn.addEventListener('click', () => {
+      if (logConsole) logConsole.textContent = '';
     });
-  };
+  }
 
-  // Check storage on load
-  refreshAudienceUI();
+  function extractIgUsername(url) {
+    const match = (url || '').match(/^https?:\/\/(www\.)?instagram\.com\/([a-zA-Z0-9_.]+)\/?(?:[?#].*)?$/);
+    if (match && !['p', 'explore', 'reels', 'stories', 'direct', 'accounts', 'about', 'tv', 'reel'].includes(match[2])) {
+      return match[2];
+    }
+    return null;
+  }
 
-  let shouldCancel = false;
+  let detectedUsername = null;
 
-  async function runScrape(username, scrapeType, maxLimit, baseDelay) {
-    shouldCancel = false;
-    const numericLimit = (maxLimit && maxLimit > 0) ? maxLimit : Infinity;
-    const safeLimitForStorage = numericLimit === Infinity ? 0 : numericLimit;
-    const startTime = Date.now();
+  async function detectUsername() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      detectedUsername = tab?.url ? extractIgUsername(tab.url) : null;
+    } catch { detectedUsername = null; }
 
-    const updateTask = (status, message, totalExtracted = 0, isFinished = false) => {
-      const task = {
-        active: !isFinished, username, type: scrapeType,
-        totalExtracted, maxLimit: safeLimitForStorage,
-        status, message, startTime,
-        lastUpdated: Date.now(),
-        finishedAt: isFinished ? Date.now() : null
-      };
-      chrome.storage.local.set({ prm_ig_scrape_task: task });
+    if (detectedUsername) {
+      usernameDisplay.textContent = `@${detectedUsername}`;
+      startBtn.disabled = false;
+    } else {
+      usernameDisplay.textContent = 'Navigate to an Instagram profile';
+      startBtn.disabled = true;
+    }
+  }
+
+  function showAudienceStatus(status, msg) {
+    if (statusCard) statusCard.style.display = '';
+    if (statusMsg) {
+      statusMsg.className = `status-message status-message-${status}`;
+      statusMsg.textContent = msg;
+    }
+  }
+
+  function showPreview(data) {
+    if (!previewFields) return;
+    previewFields.style.display = '';
+    if (previewUsername) previewUsername.textContent = data.username ? `@${data.username}` : '—';
+    if (previewName) previewName.textContent = data.name || '—';
+    if (previewBio) previewBio.textContent = data.bio || '—';
+    if (previewWebsite) previewWebsite.textContent = data.website || '—';
+  }
+
+  // Extraction runs in the background worker, which opens the profile in its
+  // own tab and posts the result to PRM. The popup is just a client of it, so
+  // closing this window no longer abandons a run in progress.
+  startBtn.addEventListener('click', async () => {
+    if (!detectedUsername) return;
+
+    statusCard.style.display = '';
+    addLog(`=== Starting extraction for @${detectedUsername} ===`);
+    startBtn.disabled = true;
+
+    const refuse = (msg) => {
+      addLog(`✗ ${msg}`);
+      showAudienceStatus('error', msg);
+      startBtn.disabled = false;
     };
 
+    const action = extractionType.value === 'account' ? 'account' : 'graph';
+
+    let response;
     try {
-      updateTask('info', `Resolving @${username}...`);
-
-      const headers = {
-        'accept': '*/*',
-        'x-asbd-id': '198387',
-        'x-ig-app-id': '936619743392459',
-        'x-requested-with': 'XMLHttpRequest'
-      };
-      try {
-        const csrf = await chrome.cookies.get({ url: 'https://www.instagram.com', name: 'csrftoken' });
-        if (csrf?.value) headers['x-csrftoken'] = csrf.value;
-      } catch (_) {}
-
-      // Resolve user ID
-      let userId = null;
-      try {
-        const res = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
-          headers, credentials: 'include'
-        });
-        if (res.ok) userId = (await res.json())?.data?.user?.id;
-      } catch (_) {}
-
-      if (!userId) {
-        try {
-          const res = await fetch(`https://www.instagram.com/web/search/topsearch/?context=blended&query=${encodeURIComponent(username)}&include_reel=false`, {
-            headers, credentials: 'include'
-          });
-          if (res.ok) {
-            const d = await res.json();
-            userId = d.users?.find(u => u.user.username.toLowerCase() === username.toLowerCase())?.user?.pk;
-          }
-        } catch (_) {}
-      }
-
-      if (!userId) throw new Error(`Could not find @${username}. Make sure you are logged into Instagram in this browser.`);
-
-      const queryHash = scrapeType === 'following' ? '58712303d941c6855d4e888c5f0cd22f' : '37479f2b8209594dde7facb0d904896a';
-      const edgeKey = scrapeType === 'following' ? 'edge_follow' : 'edge_followed_by';
-      let endCursor = '', hasNextPage = true, totalCollected = 0;
-      const allContacts = [];
-
-      updateTask('info', `Starting ${scrapeType} extraction...`);
-
-      while (hasNextPage && totalCollected < numericLimit) {
-        if (shouldCancel) {
-          updateTask('warning', `Stopped. Collected ${totalCollected} profiles.`, totalCollected, true);
-          return;
-        }
-
-        const count = Math.min(50, numericLimit - totalCollected);
-        const variables = { id: String(userId), include_reel: false, fetch_mutual: false, first: count };
-        if (endCursor) variables.after = endCursor;
-
-        const url = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
-        let responseData = null;
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const res = await fetch(url, { headers, credentials: 'include' });
-          if (res.status === 429) {
-            const backoff = (attempt + 1) * 5000;
-            updateTask('warning', `Rate limited. Waiting ${backoff / 1000}s...`, totalCollected);
-            await new Promise(r => setTimeout(r, backoff));
-            continue;
-          }
-          if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-          responseData = await res.json();
-          break;
-        }
-
-        if (!responseData?.data?.user) throw new Error('Could not parse Instagram response. Are you logged in?');
-
-        const edge = responseData.data.user[edgeKey];
-        if (!edge?.edges?.length) break;
-
-        const batch = edge.edges.map(e => ({
-          id: e.node.id, username: e.node.username, fullName: e.node.full_name,
-          isPrivate: e.node.is_private, isVerified: e.node.is_verified,
-          profilePicUrl: e.node.profile_pic_url
-        }));
-
-        allContacts.push(...batch);
-        totalCollected += batch.length;
-        endCursor = edge.page_info?.end_cursor || '';
-        hasNextPage = !!edge.page_info?.has_next_page && !!endCursor;
-
-        chrome.storage.local.set({ prm_ig_scraped_contacts: allContacts });
-        updateTask('running', `Scraped ${totalCollected} ${scrapeType}...`, totalCollected);
-
-        if (hasNextPage && totalCollected < numericLimit) {
-          const jitter = baseDelay + Math.ceil(baseDelay * 0.25 * Math.random());
-          await new Promise(r => setTimeout(r, jitter));
-        }
-      }
-
-      updateTask('success', `Complete! Extracted ${totalCollected} ${scrapeType}.`, totalCollected, true);
-    } catch (err) {
-      console.error('[PRM] Instagram scrape error:', err);
-      updateTask('error', err.message || 'Scraping failed.', 0, true);
-    }
-  }
-
-  // Start Scrape
-  startBtn.addEventListener('click', () => {
-    const username = targetInput.value.trim().replace(/^@/, '');
-    if (!username) { alert('Please enter an Instagram username.'); targetInput.focus(); return; }
-
-    const scrapeType = typeSelect.value;
-    const rawLimit = parseInt(limitInput.value, 10);
-    const maxLimit = isNaN(rawLimit) || rawLimit <= 0 ? 0 : rawLimit;
-    const baseDelay = parseInt(delayInput.value, 10) || 6000;
-
-    startBtn.disabled = true;
-    if (cancelBtn) { cancelBtn.style.display = ''; cancelBtn.disabled = false; }
-    if (targetInput) targetInput.disabled = true;
-    if (typeSelect) typeSelect.disabled = true;
-    if (limitInput) limitInput.disabled = true;
-    if (delayInput) delayInput.disabled = true;
-    if (actionsDiv) actionsDiv.style.display = 'none';
-
-    if (progressCard) progressCard.style.display = '';
-    if (progressTarget) progressTarget.textContent = `@${username} (${scrapeType})`;
-    if (progressCount) progressCount.textContent = maxLimit > 0 ? `0 / ${maxLimit} extracted` : '0 extracted';
-    if (progressFill) progressFill.style.width = '0%';
-    if (statusMsg) {
-      statusMsg.className = 'status-message info';
-      statusMsg.textContent = 'Connecting to Instagram…';
-      statusMsg.style.display = 'block';
-    }
-
-    chrome.storage.local.set({ prm_ig_scraped_contacts: [] });
-    runScrape(username, scrapeType, maxLimit, baseDelay);
-  });
-
-  // Cancel Scrape
-  cancelBtn.addEventListener('click', () => {
-    shouldCancel = true;
-    cancelBtn.disabled = true;
-    chrome.storage.local.get(['prm_ig_scrape_task', 'prm_ig_scraped_contacts'], (res) => {
-      const task = res.prm_ig_scrape_task || {};
-      const contacts = res.prm_ig_scraped_contacts || [];
-      const stoppedTask = {
-        ...task,
-        active: false,
-        status: 'warning',
-        message: `Extraction stopped. (${contacts.length} collected)`,
-        finishedAt: Date.now()
-      };
-      chrome.storage.local.set({ prm_ig_scrape_task: stoppedTask }, () => {
-        refreshAudienceUI();
+      response = await chrome.runtime.sendMessage({
+        type: 'PRM_EXTRACT_START',
+        action,
+        username: detectedUsername,
       });
-    });
-  });
-
-  // Import to PRM
-  importPrmBtn.addEventListener('click', async () => {
-    const config = await getStoredConfig();
-    if (!config.serverUrl || !config.sessionToken) {
-      alert('PRM is not connected. Please pair the extension in Settings.');
+    } catch {
+      refuse('The background worker is not running. Reload the extension at chrome://extensions.');
       return;
     }
 
-    chrome.storage.local.get(['prm_ig_scraped_contacts', 'prm_ig_scrape_task'], async (res) => {
-      const contacts = res.prm_ig_scraped_contacts || [];
-      if (!contacts.length) { alert('No scraped contacts found to import.'); return; }
+    // A reply of undefined means listeners were present but none handled the
+    // message — the worker is still running a build from before this feature.
+    // The popup reloads from disk on every open, so it can easily be newer.
+    if (response === undefined) {
+      refuse('The background worker is running an older build. Reload the extension at chrome://extensions.');
+      return;
+    }
 
-      importPrmBtn.disabled = true;
-      importPrmBtn.textContent = `Importing ${contacts.length} contacts…`;
+    if (!response.ok) {
+      refuse(response.reason === 'not_paired'
+        ? 'PRM is not connected. Please pair the extension in Settings.'
+        : `Could not start extraction (${response.reason}).`);
+      return;
+    }
 
-      const task = res.prm_ig_scrape_task || {};
-      const result = await bulkImportScrapedContacts(
-        config.serverUrl, config.sessionToken, contacts,
-        { source: 'instagram_audience_scraper', targetAccount: task.username || '', scrapeType: task.type || 'followers' }
-      );
-
-      if (result.success) {
-        importPrmBtn.textContent = `✓ Imported ${contacts.length} Contacts to PRM`;
-        setTimeout(() => { importPrmBtn.disabled = false; importPrmBtn.textContent = 'Import to PRM Contacts'; }, 3000);
-      } else {
-        alert(`Failed to import to PRM: ${result.error || 'Unknown error'}`);
-        importPrmBtn.disabled = false;
-        importPrmBtn.textContent = 'Import to PRM Contacts';
-      }
-    });
+    cancelBtn.style.display = '';
+    cancelBtn.disabled = false;
   });
 
-  // Export CSV
-  exportCsvBtn.addEventListener('click', () => {
-    chrome.storage.local.get(['prm_ig_scraped_contacts', 'prm_ig_scrape_task'], (res) => {
-      const contacts = res.prm_ig_scraped_contacts || [];
-      if (!contacts.length) return;
-      const csvHeaders = ['User ID', 'Username', 'Full Name', 'Is Private', 'Is Verified', 'Profile Pic URL'];
-      const rows = contacts.map(c => [
-        `"${c.id}"`, `"${(c.username || '').replace(/"/g, '""')}"`,
-        `"${(c.fullName || '').replace(/"/g, '""')}"`,
-        c.isPrivate ? 'true' : 'false', c.isVerified ? 'true' : 'false',
-        `"${c.profilePicUrl || ''}"`,
-      ]);
-      const csvContent = '\uFEFF' + [csvHeaders.join(','), ...rows.map(r => r.join(','))].join('\r\n');
-      const filename = `ig_${res.prm_ig_scrape_task?.username || 'audience'}_${res.prm_ig_scrape_task?.type || 'followers'}_${Date.now()}.csv`;
-      downloadTxtFile(filename, csvContent, 'text/csv;charset=utf-8;');
-    });
+  cancelBtn.onclick = async () => {
+    cancelBtn.disabled = true;
+    addLog('⚠ Cancellation requested by user.');
+    await chrome.runtime.sendMessage({ type: 'PRM_EXTRACT_CANCEL' });
+  };
+
+  /** Mirror the worker's job status into the log, the banner, and the preview. */
+  function renderExtractStatus(state) {
+    if (!state) return;
+
+    statusCard.style.display = '';
+    addLog(state.message);
+    showAudienceStatus(state.status, state.message);
+
+    if (state.preview) showPreview(state.preview);
+
+    startBtn.disabled = state.active || !detectedUsername;
+    cancelBtn.style.display = state.active ? '' : 'none';
+  }
+
+  chrome.storage.local.get(['prm_extract_status'], (res) => renderExtractStatus(res.prm_extract_status));
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.prm_extract_status) {
+      renderExtractStatus(changes.prm_extract_status.newValue);
+    }
   });
 
-  // Export JSON
-  exportJsonBtn.addEventListener('click', () => {
-    chrome.storage.local.get(['prm_ig_scraped_contacts', 'prm_ig_scrape_task'], (res) => {
-      const contacts = res.prm_ig_scraped_contacts || [];
-      if (!contacts.length) return;
-      const jsonContent = JSON.stringify(contacts, null, 2);
-      const filename = `ig_${res.prm_ig_scrape_task?.username || 'audience'}_${res.prm_ig_scrape_task?.type || 'followers'}_${Date.now()}.json`;
-      downloadTxtFile(filename, jsonContent, 'application/json');
-    });
-  });
+  refreshAudienceUI = detectUsername;
+  detectUsername();
 }
+
 
 // ── View 3: Connected / Settings ─────────────────────────
 
@@ -1412,16 +1148,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Watch for storage updates
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local') {
-      if (changes.prm_full_import_job_status) {
-        updateUIWithFullImportStatus(changes.prm_full_import_job_status.newValue);
-      }
       if (changes.prm_import_job_status) {
         updateUIWithJobStatus(changes.prm_import_job_status.newValue);
       }
-      if (changes.prm_ig_scrape_task || changes.prm_ig_scraped_contacts) {
-        refreshAudienceUI();
-      }
-      if (changes.prm_pending_debug_logs) {
+      if (changes.prm_pending_debug_logs && Array.isArray(changes.prm_pending_debug_logs.newValue) && changes.prm_pending_debug_logs.newValue.length > 0) {
         checkAndDownloadPendingLogs();
       }
     }

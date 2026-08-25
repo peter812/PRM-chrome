@@ -51,7 +51,7 @@ class DebugTracker {
     this.originalFetch = globalThis.fetch;
     const self = this;
 
-    globalThis.fetch = async function (resource, init) {
+    globalThis.fetch = async function (resource, init = {}) {
       if (!self.enabled || !self.activeTask) {
         return self.originalFetch.apply(this, arguments);
       }
@@ -61,34 +61,41 @@ class DebugTracker {
       let method = 'GET';
       if (typeof resource === 'string') {
         url = resource;
+      } else if (resource instanceof Request) {
+        url = resource.url;
+        method = resource.method || 'GET';
       } else if (resource && typeof resource === 'object' && resource.url) {
         url = resource.url;
       }
+
       if (init && init.method) {
         method = init.method.toUpperCase();
       }
 
-      // Check if it's a request to the PRM server to add tracing header
-      let modifiedInit = init;
-      const serverUrl = await get(STORAGE_KEYS.SERVER_URL);
-
-      if (serverUrl && url.startsWith(serverUrl.replace(/\/+$/, ''))) {
-        const traceInfo = `task=${encodeURIComponent(self.activeTask.name)};subtask=Network Request: ${method} ${encodeURIComponent(url)}`;
-        modifiedInit = {
-          ...(init || {}),
-          headers: {
-            ...(init && init.headers ? init.headers : {}),
-            'X-PRM-Trace': traceInfo,
-          },
-        };
+      const currentTaskName = self.activeTask?.name;
+      if (!currentTaskName) {
+        return self.originalFetch.apply(this, arguments);
       }
 
+      const headers = new Headers(
+        resource instanceof Request ? resource.headers : (init && init.headers ? init.headers : {})
+      );
+
+      const serverUrl = await get(STORAGE_KEYS.SERVER_URL);
+      if (serverUrl && url.startsWith(serverUrl.replace(/\/+$/, ''))) {
+        const traceInfo = `task=${encodeURIComponent(currentTaskName)};subtask=Network Request: ${method} ${encodeURIComponent(url)}`;
+        headers.set('X-PRM-Trace', traceInfo);
+      }
+
+      const modifiedInit = { ...init, headers };
       const subtaskName = `Network Request: ${method} ${url}`;
       const startTime = new Date();
       const startTimeStr = startTime.toISOString();
 
       try {
-        const response = await self.originalFetch.call(globalThis, url, modifiedInit);
+        const response = resource instanceof Request && !init.headers
+          ? await self.originalFetch.call(globalThis, resource)
+          : await self.originalFetch.call(globalThis, url, modifiedInit);
         const duration = new Date() - startTime;
         self.addSubtaskDirect(subtaskName, startTimeStr, `${duration}ms`);
         return response;

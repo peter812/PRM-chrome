@@ -2,18 +2,39 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=360" />
-  <title>PRM Extension</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <meta name="viewport" content="width=380" />
+  <title>PRM Companion</title>
   <link rel="stylesheet" href="css/styles.css" />
+  <script>
+    try {
+      const cachedTheme = localStorage.getItem('prm_theme_cached');
+      if (cachedTheme === 'dark' || (!cachedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    } catch (_) {}
+  </script>
   <script type="module" src="js/popup.js"></script>
 </head>
 <body>
 
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="brand-wrapper">
+      <div class="brand-logo-badge">P</div>
+      <span class="brand-title">PRM Companion</span>
+    </div>
+    <div class="header-actions">
+      <button id="theme-quick-toggle" class="icon-btn hover-elevate" title="Toggle appearance" aria-label="Toggle appearance">
+        <svg id="theme-icon-moon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
   <!-- ============ VIEW 1: Server URL Input ============ -->
-  <section id="view-server-url" class="view">
+  <section id="view-server-url" class="view" style="display:none;">
     <div class="view-inner">
       <div class="view-header">
         <img src="../icons/icon-48.png" alt="PRM logo" class="view-logo" />
@@ -21,7 +42,7 @@
         <p class="view-subtitle">Connect to your PRM instance</p>
       </div>
 
-      <form id="server-url-form" action="#" onsubmit="event.preventDefault(); return false;" autocomplete="off" novalidate>
+      <form id="server-url-form" action="#" autocomplete="off" novalidate>
         <div class="form-group">
           <label class="form-label" for="server-url-input">Server URL</label>
           <input
@@ -35,7 +56,7 @@
           <span class="form-helper">The URL of your self-hosted PRM instance</span>
         </div>
 
-        <button type="button" class="btn btn-primary btn-full" id="connect-btn">
+        <button type="button" class="btn btn-primary btn-full hover-elevate active-elevate-2" id="connect-btn" style="margin-top: 10px;">
           Connect
         </button>
       </form>
@@ -50,10 +71,10 @@
       <div class="view-header">
         <h1 class="view-title">Enter Pairing Code</h1>
         <p class="view-subtitle">Open PRM Settings → Chrome Extension to see your code</p>
-        <p id="code-entry-server-text" class="view-subtitle" style="font-family: monospace; font-size: 11px; opacity: 0.8; margin-top: 4px;"></p>
+        <p id="code-entry-server-text" class="view-subtitle" style="font-family: var(--font-mono); font-size: 11px; opacity: 0.8; margin-top: 4px;"></p>
       </div>
 
-      <form id="code-entry-form" action="#" onsubmit="event.preventDefault(); return false;" autocomplete="off">
+      <form id="code-entry-form" action="#" autocomplete="off">
         <div class="code-input-group">
           <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="0" aria-label="Digit 1" />
           <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="1" aria-label="Digit 2" />
@@ -61,7 +82,7 @@
           <input class="code-digit" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" data-index="3" aria-label="Digit 4" />
         </div>
 
-        <button type="button" class="btn btn-primary btn-full" id="verify-btn" disabled>
+        <button type="button" class="btn btn-primary btn-full hover-elevate active-elevate-2" id="verify-btn" style="margin-top: 10px;" disabled>
           Verify
         </button>
       </form>
@@ -100,44 +121,25 @@
         </div>
 
         <div class="scraper-section">
-          <button class="btn btn-primary btn-full" id="scrape-btn" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+          <button class="btn btn-primary btn-full hover-elevate active-elevate-2" id="scrape-btn" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="15" height="15">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
             </svg>
             Scrape Profile
           </button>
-          <button class="btn btn-secondary btn-full" id="import-posts-btn" style="margin-top: 8px; display: none;" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+          <button class="btn btn-secondary btn-full hover-elevate active-elevate-2" id="import-posts-btn" style="margin-top: 6px; display: none;" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="15" height="15">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
             </svg>
             Import Posts to PRM
           </button>
-          <button class="btn btn-secondary btn-full" id="import-latest-post-btn" style="margin-top: 8px; display: none;" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
+          <button class="btn btn-secondary btn-full hover-elevate active-elevate-2" id="import-latest-post-btn" style="margin-top: 6px; display: none;" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="15" height="15">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
             </svg>
             Add Most Recent Post to PRM
           </button>
-          <button class="btn btn-secondary btn-full" id="extract-followers-btn" style="margin-top: 8px; display: none;" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
-            </svg>
-            Extract Followers
-          </button>
-          <button class="btn btn-secondary btn-full" id="extract-following-btn" style="margin-top: 8px; display: none;" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.999-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" />
-            </svg>
-            Extract Following
-          </button>
-          <button class="btn btn-primary btn-full" id="grab-account-import-btn" style="margin-top: 8px; display: none;" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
-            </svg>
-            Grab Followers & Following to PRM
-          </button>
           <div id="scrape-status" class="status-message" role="status"></div>
-
         </div>
 
         <!-- Scraped data card (hidden until data is available) -->
@@ -175,65 +177,58 @@
       <!-- ── Audience Tab ── -->
       <div id="tab-audience" class="tab-panel" role="tabpanel" style="display:none;">
         <div class="scraper-section">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h2 class="section-title" style="margin-bottom: 0;">Instagram Audience Extraction</h2>
-            <a href="#" id="audience-open-tab" title="Open in a full tab so scraping continues while you browse" style="font-size: 11px; white-space: nowrap;">Open in Tab ↗</a>
-          </div>
-          
-          <div class="form-group" style="margin-bottom: 10px;">
-            <label class="form-label" for="audience-target-input">Target Username</label>
-            <input id="audience-target-input" class="form-input" type="text" placeholder="e.g. instagram or @username" />
+          <h2 class="section-title">Instagram Account Extraction</h2>
+
+          <div id="audience-username-display" class="url-display" style="margin-bottom: 8px;">
+            <span id="audience-username-text" class="url-text">Navigate to an Instagram profile</span>
           </div>
 
-          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <div style="flex: 1;">
-              <label class="form-label" for="audience-type-select">Type</label>
-              <select id="audience-type-select" class="form-input">
-                <option value="followers">Followers</option>
-                <option value="following">Following</option>
-              </select>
-            </div>
-            <div style="flex: 1;">
-              <label class="form-label" for="audience-limit-input">Max Count</label>
-              <input id="audience-limit-input" class="form-input" type="number" placeholder="Unlimited" min="0" />
-            </div>
+          <div class="form-group" style="margin-bottom: 8px;">
+            <label class="form-label" for="audience-extraction-type">Extraction Type</label>
+            <select id="audience-extraction-type" class="form-input">
+              <option value="account">Account Extraction</option>
+              <option value="full">Full Extraction (Account + Followers/Following)</option>
+            </select>
           </div>
 
-          <div class="form-group" style="margin-bottom: 12px;">
-            <label class="form-label" for="audience-delay-input">Delay (ms)</label>
-            <input id="audience-delay-input" class="form-input" type="number" value="6000" min="500" step="100" />
-          </div>
-
-          <button class="btn btn-primary btn-full" id="audience-start-btn">
+          <button class="btn btn-primary btn-full hover-elevate active-elevate-2" id="audience-start-btn" disabled>
             Start Extraction
           </button>
-          <button class="btn btn-danger btn-full" id="audience-cancel-btn" style="margin-top: 8px; display: none;">
+          <button class="btn btn-danger btn-full hover-elevate active-elevate-2" id="audience-cancel-btn" style="margin-top: 6px; display: none;">
             Cancel Extraction
           </button>
         </div>
 
-        <div id="audience-progress-card" class="scraped-card" style="display:none; margin-top: 12px;">
-          <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; margin-bottom: 6px;">
-            <span id="audience-progress-target">@target</span>
-            <span id="audience-progress-count">0 extracted</span>
-          </div>
-          <div class="progress-bar-bg" style="width: 100%; height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; margin-bottom: 8px;">
-            <div id="audience-progress-fill" style="width: 0%; height: 100%; background: #3b82f6; transition: width 0.3s;"></div>
-          </div>
-          <div id="audience-status-msg" class="status-message status-message-info" style="margin-bottom: 8px;">Ready</div>
+        <div id="audience-status-card" class="scraped-card" style="display:none; margin-top: 8px;">
+          <div id="audience-status-msg" class="status-message status-message-info">Ready</div>
 
-          <div id="audience-actions" style="display: none; flex-direction: column; gap: 6px; margin-top: 10px;">
-            <button class="btn btn-primary btn-full" id="audience-import-prm-btn">
-              Import to PRM Contacts
-            </button>
-            <div style="display: flex; gap: 6px;">
-              <button class="btn btn-secondary" style="flex: 1;" id="audience-export-csv-btn">
-                Export CSV
-              </button>
-              <button class="btn btn-secondary" style="flex: 1;" id="audience-export-json-btn">
-                Export JSON
-              </button>
+          <!-- Preview of captured profile fields -->
+          <div id="audience-preview-fields" class="scraped-fields" style="display: none; margin-top: 6px;">
+            <div class="scraped-field">
+              <span class="scraped-label">Username</span>
+              <span class="scraped-value" id="audience-preview-username">—</span>
             </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Display Name</span>
+              <span class="scraped-value" id="audience-preview-name">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Bio</span>
+              <span class="scraped-value scraped-bio" id="audience-preview-bio">—</span>
+            </div>
+            <div class="scraped-field">
+              <span class="scraped-label">Website</span>
+              <span class="scraped-value" id="audience-preview-website">—</span>
+            </div>
+          </div>
+
+          <!-- Diagnostic / Progress Log Console -->
+          <div class="log-console-container">
+            <div class="log-console-header">
+              <span class="scraped-label">Diagnostic Log</span>
+              <button id="audience-clear-logs-btn" type="button" class="btn-link" style="width:auto; padding:0; font-size:11px;">Clear</button>
+            </div>
+            <pre id="audience-log-console" class="log-console"></pre>
           </div>
         </div>
       </div>
@@ -294,10 +289,10 @@
         <div class="settings-section">
           <h2 class="section-title">Connection</h2>
           <div class="connected-status-info">
-            <span class="status-dot status-dot-green"></span>
-            <span>Connected to PRM</span>
+            <span class="status-dot online" id="settings-status-dot"></span>
+            <span id="settings-connection-text">Connected to PRM</span>
           </div>
-          <button class="btn btn-danger btn-full" id="disconnect-btn">
+          <button class="btn btn-danger btn-full hover-elevate active-elevate-2" id="disconnect-btn">
             Disconnect
           </button>
         </div>
@@ -305,5 +300,14 @@
 
     </div>
   </section>
+
+  <!-- Sticky Bottom Footer -->
+  <footer class="app-footer">
+    <span id="footer-connection-host">PRM Companion</span>
+    <span class="connection-indicator">
+      <span class="status-dot" id="footer-status-dot"></span>
+      <span id="footer-status-label">Offline</span>
+    </span>
+  </footer>
 </body>
 </html>
